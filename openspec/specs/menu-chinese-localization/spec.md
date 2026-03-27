@@ -1,0 +1,40 @@
+# menu-chinese-localization Specification
+
+## Purpose
+TBD - created by archiving change add-save-new-export-png-and-chinese-menu. Update Purpose after archive.
+## Requirements
+### Requirement: 主要命令菜单 SHALL 显示中文标签
+系统 SHALL 在工具栏及菜单型控件中为主要命令动作显示中文标签，包括新建、保存、撤销、重做、新增子节点、导出与侧边栏切换等操作。
+
+#### Scenario: 用户查看主工具栏命令
+- **WHEN** 用户打开应用并查看工具栏动作
+- **THEN** 主要命令标签以中文显示，且现有快捷键保持不变
+
+### Requirement: 导出弹窗动作 SHALL 显示中文标签
+系统 SHALL 将导出弹窗标题、导出格式动作文本以及取消/关闭动作文案显示为中文。
+
+#### Scenario: 用户打开导出弹窗
+- **WHEN** 用户打开导出弹窗
+- **THEN** 所有可见导出动作标签均为中文，包含 PNG 选项标签
+
+### Requirement: 侧边栏菜单分区 SHALL 显示中文标签
+系统 SHALL 将侧边栏中布局/主题相关菜单分区标题与命令型控件显示为中文，同时不改变底层内部存储值。
+
+#### Scenario: 用户打开侧边栏控件
+- **WHEN** 用户在侧边栏打开布局与主题选择器
+- **THEN** 分区标题与选项标签以中文展示，且存储的 `layoutType` 与 `theme` 值保持稳定
+
+### Requirement: 英文原生顶层菜单 MUST 被隐藏
+桌面窗口在交付体验中 MUST 隐藏原生英文顶层应用菜单（包括 `File`、`Edit` 及类似默认入口）。
+
+#### Scenario: 应用窗口启动
+- **WHEN** 桌面应用启动并显示主窗口
+- **THEN** 用户界面中不可见任何英文原生顶层菜单标签
+
+### Requirement: 隐藏原生菜单后应用内命令入口 SHALL 保持可用
+当原生顶层菜单被隐藏时，核心操作（新建、打开、保存、导出、编辑动作）SHALL 仍可通过现有应用内控件与已配置快捷键触达。
+
+#### Scenario: 菜单隐藏后用户执行核心文件操作
+- **WHEN** 用户通过工具栏/侧边栏动作或键盘快捷键进行操作
+- **THEN** 命令执行行为保持正常，即使原生顶层菜单已被隐藏
+
