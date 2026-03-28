@@ -1,8 +1,44 @@
 # mindmap-png-export Specification
 
 ## Purpose
-TBD - created by archiving change add-save-new-export-png-and-chinese-menu. Update Purpose after archive.
+
+定义 PNG 导出功能的核心需求，确保导出的 PNG 图像完整包含所有可见节点和连线，支持缩放比例调整，并提供可靠的降级机制。
+
 ## Requirements
+
+### Requirement: PNG 导出边界计算 MUST 基于四极值点
+系统 MUST 基于场景中所有节点矩形和连线控制点的最左、最上、最右、最下四个极值点计算内容边界，确保所有可见内容都在输出图像范围内。
+
+#### Scenario: 多节点导图导出时边界正确
+- **WHEN** 导图包含多个分散在不同位置的节点
+- **THEN** 生成的 PNG 边界覆盖所有节点和连线，无内容截断
+
+#### Scenario: 节点数量增加时边界自适应扩展
+- **WHEN** 用户向导图添加更多节点后导出 PNG
+- **THEN** 生成的 PNG 边界自动扩展以包含新增内容，而不是保持固定尺寸
+
+### Requirement: Electron 分块捕获 MUST 验证瓦片尺寸和坐标对齐
+Electron BrowserWindow 分块捕获流程 MUST 对每个瓦片执行尺寸验证，并在拼接时确保像素级坐标对齐。
+
+#### Scenario: 大尺寸导图分块捕获后完整拼接
+- **WHEN** 场景尺寸超过 `MAX_PNG_CAPTURE_TILE_EDGE` 时触发分块捕获
+- **THEN** 所有瓦片正确拼接，接缝处无错位或重复像素
+
+#### Scenario: 边缘瓦片尺寸不足时正确处理
+- **WHEN** 最后一行或最后一列的瓦片尺寸小于标准瓦片尺寸
+- **THEN** 系统正确裁剪或填充边缘瓦片，最终图像尺寸与预期一致
+
+### Requirement: PNG 导出验证 MUST 包含尺寸和内容完整性检查
+PNG 导出流程 MUST 在生成后验证：(1) 输出尺寸与预期场景尺寸一致，(2) 图像内容非空白且包含有效像素数据。
+
+#### Scenario: 导出后尺寸验证失败时触发 fallback
+- **WHEN** Electron 捕获生成的 PNG 尺寸与预期不符
+- **THEN** 系统自动降级到软件渲染 fallback 并重新生成
+
+#### Scenario: 导出图像非空验证
+- **WHEN** 生成的 PNG 文件存在但内容为空白或接近空白
+- **THEN** 系统检测到无效输出并尝试 fallback 或抛出明确错误
+
 ### Requirement: 导出选项 SHALL 包含 PNG
 导出流程 SHALL 在现有支持格式基础上提供 PNG 作为可选输出格式。
 
@@ -34,6 +70,10 @@ PNG 导出 SHALL 捕获与编辑器可见内容一致的完整渲染场景，包
 #### Scenario: 同层节点很多时仍完整导出
 - **WHEN** 当前导图在同一层级包含大量节点（例如 100 个），且用户确认 PNG 导出
 - **THEN** 生成的 `.png` 仍完整包含该层级全部可见节点，不会只显示部分前序节点
+
+#### Scenario: 大尺寸导图触发分块捕获时仍保持完整
+- **WHEN** 导图内容边界计算后的尺寸超过 `MAX_PNG_CAPTURE_TILE_EDGE`
+- **THEN** 系统自动启用分块捕获并正确拼接，最终 PNG 包含全部可见内容
 
 ### Requirement: 导出流程 MUST 等待渲染就绪后再截取快照
 在写入 PNG 文件前，导出流程 MUST 从渲染就绪状态截取快照，避免因时序竞态导致内容缺失。
@@ -78,7 +118,7 @@ If graph content is present, exported PNG SHALL include real graph geometry deri
 - **THEN** 导出不会执行，界面提示用户修正输入
 
 ### Requirement: PNG 导出分辨率 SHALL 按缩放百分比计算
-系统 SHALL 先基于内容边界与导出内边距计算逻辑导出尺寸，再将缩放百分比转换为导出倍率应用于该逻辑尺寸；输出像素尺寸 MUST 由“内容边界尺寸 × 导出倍率”推导，MUST NOT 退化为固定基准尺寸或仅在裁切后再缩放。
+系统 SHALL 先基于内容边界与导出内边距计算逻辑导出尺寸，再将缩放百分比转换为导出倍率应用于该逻辑尺寸；输出像素尺寸 MUST 由"内容边界尺寸 × 导出倍率"推导，MUST NOT 退化为固定基准尺寸或仅在裁切后再缩放。
 
 #### Scenario: 用户以 200% 导出
 - **WHEN** 用户输入 `200` 并确认导出
@@ -91,6 +131,17 @@ If graph content is present, exported PNG SHALL include real graph geometry deri
 #### Scenario: 达到栅格安全上限时保持完整内容
 - **WHEN** 计算后的 PNG 像素尺寸超过栅格安全上限
 - **THEN** 系统对完整场景执行统一等比收敛，导出结果仍包含全部可见节点与连线，且不发生局部裁切
+
+### Requirement: PNG export MUST use latest state after render readiness
+Before snapshot capture, the export flow MUST wait for render readiness and then read the latest store snapshot used for export payload construction.
+
+#### Scenario: Export right after text update
+- **WHEN** a user changes node text and triggers PNG export without delay
+- **THEN** the exported image contains the updated text, not the previous value
+
+#### Scenario: Electron capture waits for image load
+- **WHEN** BrowserWindow captures the SVG rasterization
+- **THEN** capture occurs only after the image element fires 'load' event and two requestAnimationFrame cycles complete
 
 ### Requirement: PNG 导出文字清晰度 SHALL 随倍率提升而提升
 系统在导出同一导图内容时，较高导出倍率下的文本与线条边缘 SHALL 呈现更高可辨识度，且 MUST NOT 出现“倍率变化但清晰度无明显变化”的结果。

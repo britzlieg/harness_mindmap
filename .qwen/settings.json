@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run *)",
+      "Bash(npm test *)",
+      "Bash(powershell *)",
+      "Bash(openspec *)",
+      "Bash(mkdir *)"
+    ]
+  },
+  "$version": 3
+}

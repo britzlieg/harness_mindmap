@@ -66,10 +66,22 @@ npm test -- tests/<targeted-file>.test.ts
 - 画布或节点交互：`src/components/Canvas/`、`src/hooks/`、`src/stores/`
 - 文件操作链路：`src/hooks/useFileOperations.ts`、`electron/ipc/file-handlers.ts`、`electron/services/file-service.ts`
 - 导出链路：`src/components/Dialogs/ExportDialog.tsx`、`electron/ipc/export-handlers.ts`、`electron/services/export*`
+  - PNG 导出渲染：`electron/services/export/png-renderer.ts`（多级验证链）
+  - SVG 导出渲染：`electron/services/export/svg-renderer.ts`
+  - 场景构建：`electron/services/export/scene-builder.ts`
+  - 核心服务：`electron/services/export-service.ts`（边界计算、分块捕获）
 - 布局或主题逻辑：`electron/shared/`、`src/themes/`、`src/utils/`、`src/components/Sidebar/`
 - 窗口行为：`src/components/Window/`、`electron/preload.ts`、`electron/main.ts`
 
+## 已归档变更
+
+- **2026-03-28-fix-png-export**: PNG 导出完整性修复
+  - 修复内容：边界计算、分块捕获验证、多级验证链
+  - 规范同步：`openspec/specs/mindmap-png-export/spec.md`
+  - 测试覆盖：`tests/export/png-export-integrity.test.ts`（13 个用例）
+
 ## 工作约束
+- 强约束：所有会话和文档都用中文。
 
 - 所有新增文档、修改文档、架构说明、规范说明、操作指南、评审记录，统一使用中文编写；除代码标识、命令、路径、协议字段名等必须保留原文的内容外，不使用英文作为正文语言。
 - 不要修改 `dist/`、`dist-electron/`、`node_modules/`，除非用户明确要求，或这些产物是验证流程自动生成的结果。

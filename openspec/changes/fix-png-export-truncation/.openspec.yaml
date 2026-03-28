@@ -1,0 +1,20 @@
+name: fix-png-export-truncation
+description: Fix truncation issue when exporting PNG in the current project.
+version: "0.1.0"
+applyRequires:
+  - proposal
+  - design
+  - tasks
+artifacts:
+  - id: proposal
+    type: document
+    status: pending
+    dependencies: []
+  - id: design
+    type: document
+    status: pending
+    dependencies: [proposal]
+  - id: tasks
+    type: plan
+    status: pending
+    dependencies: [design]

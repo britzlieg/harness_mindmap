@@ -342,6 +342,68 @@ describe('export-service', () => {
     });
     expect(svg).toContain('New Node');
   });
+
+  it('exports 5-level mindmap with 5 children per node without bottom truncation', async () => {
+    function buildTree(depth: number, maxDepth: number, prefix: string): Node {
+      const node = makeNode(`${prefix}`, `Node ${prefix}`);
+      if (depth < maxDepth) {
+        node.children = Array.from({ length: 5 }, (_, i) => {
+          const child = buildTree(depth + 1, maxDepth, `${prefix}-${i + 1}`);
+          child.parentId = node.id;
+          return child;
+        });
+      }
+      return node;
+    }
+
+    const root = buildTree(0, 4, 'root');
+    const png = await exportToPNG([root], {
+      metadata: makeMetadata('mindmap', 'default'),
+      minWidth: 1200,
+      minHeight: 800,
+      padding: 56,
+      scale: 1,
+    });
+    const rgba = decodePngRgba(png);
+
+    expect(rgba.width).toBeGreaterThan(0);
+    expect(rgba.height).toBeGreaterThan(0);
+
+    const backgroundPredicate = (r: number, g: number, b: number) =>
+      r > 248 && g > 248 && b > 248;
+
+    expect(hasPixel(
+      rgba,
+      0,
+      Math.max(0, Math.floor(rgba.height * 0.8)),
+      rgba.width - 1,
+      rgba.height - 1,
+      (r, g, b) => !backgroundPredicate(r, g, b)
+    )).toBe(true);
+
+    const halfW = Math.floor(rgba.width / 2);
+    const halfH = Math.floor(rgba.height / 2);
+
+    expect(hasPixel(
+      rgba, 0, 0, halfW, halfH,
+      (r, g, b) => !backgroundPredicate(r, g, b)
+    )).toBe(true);
+
+    expect(hasPixel(
+      rgba, halfW, 0, rgba.width - 1, halfH,
+      (r, g, b) => !backgroundPredicate(r, g, b)
+    )).toBe(true);
+
+    expect(hasPixel(
+      rgba, 0, halfH, halfW, rgba.height - 1,
+      (r, g, b) => !backgroundPredicate(r, g, b)
+    )).toBe(true);
+
+    expect(hasPixel(
+      rgba, halfW, halfH, rgba.width - 1, rgba.height - 1,
+      (r, g, b) => !backgroundPredicate(r, g, b)
+    )).toBe(true);
+  });
 });
 
 function decodePngRgba(png: Buffer): {

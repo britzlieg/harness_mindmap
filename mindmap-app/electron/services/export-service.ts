@@ -369,11 +369,16 @@ function buildRenderScene(nodes: Node[], optionsOrSize?: LegacySize | ExportRend
     contentBounds.bottom = Math.max(options.minHeight, FALLBACK_EXPORT_EDGE);
   }
 
+  // Calculate content dimensions based on the four extreme boundary points
   const contentWidth = Math.max(1, contentBounds.right - contentBounds.left);
   const contentHeight = Math.max(1, contentBounds.bottom - contentBounds.top);
+
+  // Add padding and ensure minimum dimensions
   const logicalWidth = Math.max(options.minWidth, Math.ceil(contentWidth + options.padding * 2), FALLBACK_EXPORT_EDGE);
   const logicalHeight = Math.max(options.minHeight, Math.ceil(contentHeight + options.padding * 2), FALLBACK_EXPORT_EDGE);
 
+  // Calculate offset to center content within the padded canvas
+  // The offset ensures that the leftmost/topmost content starts at 'padding' pixels from the canvas edge
   const extraHorizontalSpace = Math.max(0, logicalWidth - (contentWidth + options.padding * 2));
   const extraVerticalSpace = Math.max(0, logicalHeight - (contentHeight + options.padding * 2));
   const offsetX = options.padding + extraHorizontalSpace / 2 - contentBounds.left;
@@ -452,11 +457,82 @@ function fitSceneForRaster(scene: RenderScene): RenderScene {
   const pixelScale = Math.min(1, Math.sqrt(MAX_RASTER_EXPORT_PIXELS / (scene.width * scene.height)));
   const fitScale = Math.min(edgeScale, pixelScale);
 
-  if (!Number.isFinite(fitScale) || fitScale >= 1) {
-    return scene;
+  let scaledScene: RenderScene;
+
+  // Apply scale transformation if needed
+  if (Number.isFinite(fitScale) && fitScale < 1) {
+    scaledScene = scaleRenderScene(scene, fitScale, 'ceil');
+  } else {
+    scaledScene = scene;
   }
 
-  return scaleRenderScene(scene, fitScale, 'ceil');
+  // Recalculate content bounds after scaling to ensure no content is clipped
+  // Consider all four extreme points: leftmost, topmost, rightmost, bottommost
+  const contentBounds = createEmptyContentBounds();
+
+  // Include all nodes in bounds calculation
+  for (const node of scaledScene.nodes) {
+    extendContentBoundsByRect(contentBounds, node.x, node.y, node.width, node.height);
+  }
+
+  // Include all connection points (start, end, and control points) in bounds calculation
+  for (const path of scaledScene.connections) {
+    extendContentBoundsByPoint(contentBounds, path.start);
+    extendContentBoundsByPoint(contentBounds, path.end);
+    extendContentBoundsByPoint(contentBounds, path.cp1);
+    extendContentBoundsByPoint(contentBounds, path.cp2);
+  }
+
+  // Ensure bounds are finite
+  if (!hasFiniteContentBounds(contentBounds)) {
+    return scaledScene;
+  }
+
+  // Check if content extends beyond canvas boundaries (negative coordinates or overflow)
+  // Use the four extreme boundary points to determine if adjustment is needed
+  const hasNegativeCoords = contentBounds.left < 0 || contentBounds.top < 0;
+  const hasOverflowCoords = contentBounds.right > scaledScene.width || contentBounds.bottom > scaledScene.height;
+
+  // If content doesn't fit within the canvas, we need to adjust
+  if (hasNegativeCoords || hasOverflowCoords) {
+    // Calculate offset to ensure all content fits within the expanded canvas
+    // Shift content right/down if bounds are negative to keep everything in positive coordinates
+    const offsetX = contentBounds.left < 0 ? Math.ceil(Math.abs(contentBounds.left)) : 0;
+    const offsetY = contentBounds.top < 0 ? Math.ceil(Math.abs(contentBounds.top)) : 0;
+
+    // Calculate the required canvas size based on the four extreme boundary points
+    // This ensures the canvas is large enough to contain all content after shifting
+    const requiredWidth = Math.ceil(contentBounds.right - contentBounds.left);
+    const requiredHeight = Math.ceil(contentBounds.bottom - contentBounds.top);
+
+    // Use the larger of current size and required size to ensure no content is clipped
+    const newWidth = Math.max(scaledScene.width, requiredWidth);
+    const newHeight = Math.max(scaledScene.height, requiredHeight);
+
+    // Shift all nodes and connections by the offset to ensure positive coordinates
+    const shiftedNodes = scaledScene.nodes.map((node) => ({
+      ...node,
+      x: node.x + offsetX,
+      y: node.y + offsetY,
+    }));
+
+    const shiftedConnections = scaledScene.connections.map((path) => ({
+      start: { x: path.start.x + offsetX, y: path.start.y + offsetY },
+      end: { x: path.end.x + offsetX, y: path.end.y + offsetY },
+      cp1: { x: path.cp1.x + offsetX, y: path.cp1.y + offsetY },
+      cp2: { x: path.cp2.x + offsetX, y: path.cp2.y + offsetY },
+    }));
+
+    return {
+      ...scaledScene,
+      width: newWidth,
+      height: newHeight,
+      nodes: shiftedNodes,
+      connections: shiftedConnections,
+    };
+  }
+
+  return scaledScene;
 }
 
 export function fitExportSceneForRaster(scene: RenderScene): RenderScene {
@@ -704,7 +780,7 @@ function encodeRgbaToPng(rgbaPixels: Buffer, width: number, height: number): Buf
   ]);
 }
 
-function readPngDimensions(png: Buffer): { width: number; height: number } | null {
+export function readPngDimensions(png: Buffer): { width: number; height: number } | null {
   // PNG signature + IHDR chunk header is required to read dimensions.
   if (png.length < 24) return null;
   const signature = [137, 80, 78, 71, 13, 10, 26, 10];
@@ -720,23 +796,62 @@ function readPngDimensions(png: Buffer): { width: number; height: number } | nul
   };
 }
 
+/**
+ * Copy a BGRA tile buffer to an RGBA destination buffer with bounds checking.
+ * Includes validation to prevent out-of-bounds writes and ensure tile dimensions match.
+ */
 function copyBgraTileToRgba(
   destination: Buffer,
   destinationWidth: number,
+  destinationHeight: number,
   tileBgra: Buffer,
   tileWidth: number,
   tileHeight: number,
   offsetX: number,
   offsetY: number
 ): void {
-  for (let y = 0; y < tileHeight; y++) {
-    for (let x = 0; x < tileWidth; x++) {
+  // Validate that the tile fits within the destination bounds
+  const expectedMaxX = offsetX + tileWidth;
+  const expectedMaxY = offsetY + tileHeight;
+  
+  if (expectedMaxX > destinationWidth || expectedMaxY > destinationHeight) {
+    // Tile extends beyond destination - this should not happen in normal operation
+    // Clamp the tile to fit within bounds
+    console.warn(
+      `Tile at offset (${offsetX}, ${offsetY}) with size ${tileWidth}x${tileHeight} ` +
+      `exceeds destination bounds ${destinationWidth}x${destinationHeight}. Clamping.`
+    );
+  }
+
+  // Calculate actual copy dimensions (clamped to destination bounds)
+  const copyWidth = Math.min(tileWidth, destinationWidth - offsetX);
+  const copyHeight = Math.min(tileHeight, destinationHeight - offsetY);
+
+  // Validate source buffer has enough data
+  const requiredSrcSize = tileWidth * tileHeight * 4;
+  if (tileBgra.length < requiredSrcSize) {
+    console.warn(
+      `Tile buffer size ${tileBgra.length} is smaller than expected ${requiredSrcSize}. ` +
+      `May result in incomplete tile data.`
+    );
+  }
+
+  for (let y = 0; y < copyHeight; y++) {
+    for (let x = 0; x < copyWidth; x++) {
       const srcIndex = (y * tileWidth + x) * 4;
       const destIndex = ((offsetY + y) * destinationWidth + (offsetX + x)) * 4;
-      destination[destIndex] = tileBgra[srcIndex + 2];
-      destination[destIndex + 1] = tileBgra[srcIndex + 1];
-      destination[destIndex + 2] = tileBgra[srcIndex];
-      destination[destIndex + 3] = tileBgra[srcIndex + 3];
+      
+      // Bounds check for destination write
+      if (destIndex + 3 >= destination.length) {
+        console.error(`Destination buffer overflow at pixel (${offsetX + x}, ${offsetY + y})`);
+        continue;
+      }
+      
+      // Convert BGRA to RGBA (Electron uses BGRA format)
+      destination[destIndex] = tileBgra[srcIndex + 2];     // R
+      destination[destIndex + 1] = tileBgra[srcIndex + 1]; // G
+      destination[destIndex + 2] = tileBgra[srcIndex];     // B
+      destination[destIndex + 3] = tileBgra[srcIndex + 3]; // A
     }
   }
 }
@@ -827,8 +942,9 @@ async function tryRenderPngViaElectronSvg(svg: string, width: number, height: nu
       isEmpty: () => boolean;
       getSize: () => { width: number; height: number };
       toBitmap: () => Buffer;
-      resize: (size: { width: number; height: number; quality: 'best' | 'good' | 'better' }) => RuntimeNativeImage;
       toPNG: () => Buffer;
+      resize: (size: { width: number; height: number; quality?: 'best' | 'good' | 'better' }) => RuntimeNativeImage;
+      crop: (rect: { x: number; y: number; width: number; height: number }) => RuntimeNativeImage;
     }
 
     // Runtime-only optimization: Electron can rasterize SVG with full text rendering fidelity.
@@ -886,14 +1002,11 @@ async function tryRenderPngViaElectronSvg(svg: string, width: number, height: nu
           })`,
           false
         );
-        const captured = await offscreenWindow.webContents.capturePage({
-          x: 0,
-          y: 0,
-          width,
-          height,
-        });
+        // Capture the entire window without specifying a region to avoid platform-specific truncation bugs
+        const captured = await offscreenWindow.webContents.capturePage();
         const png = captured.toPNG();
         const outputSize = readPngDimensions(png);
+        // Validate dimensions to guard against platform-specific truncation
         if (
           png.length > 0
           && outputSize
@@ -902,12 +1015,13 @@ async function tryRenderPngViaElectronSvg(svg: string, width: number, height: nu
         ) {
           return png;
         }
+        // If dimensions don't match, fall through to tiled capture for large scenes
       } finally {
         offscreenWindow.destroy();
       }
     }
 
-    // If single-frame capture is unreliable for large scenes, fall back to tiled capture and stitch.
+    // Tiled capture for scenes exceeding single-frame limits or when single-frame capture fails dimension check
     if (electronRuntime.BrowserWindow && electronRuntime.app?.isReady?.() && electronRuntime.nativeImage?.createFromDataURL) {
       const tileWidth = Math.min(width, MAX_PNG_CAPTURE_TILE_EDGE);
       const tileHeight = Math.min(height, MAX_PNG_CAPTURE_TILE_EDGE);
@@ -928,7 +1042,8 @@ async function tryRenderPngViaElectronSvg(svg: string, width: number, height: nu
       });
 
       try {
-        const html = `<!doctype html><html><head><meta charset="utf-8" /></head><body style="margin:0;overflow:hidden;background:transparent;width:${tileWidth}px;height:${tileHeight}px;"><img id="scene" alt="" src="${dataUrl}" style="position:absolute;left:0;top:0;display:block;width:${width}px;height:${height}px;transform:translate(0px,0px);" /></body></html>`;
+        // HTML structure: body matches window size, image is larger and positioned via transform
+        const html = `<!doctype html><html><head><meta charset="utf-8" /></head><body style="margin:0;overflow:hidden;background:transparent;width:${tileWidth}px;height:${tileHeight}px;"><div id="container" style="width:${width}px;height:${height}px;position:relative;"><img id="scene" alt="" src="${dataUrl}" style="position:absolute;left:0;top:0;display:block;width:${width}px;height:${height}px;" /></div></body></html>`;
         await tiledWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
         await tiledWindow.webContents.executeJavaScript(
           `new Promise((resolve) => {
@@ -957,37 +1072,50 @@ async function tryRenderPngViaElectronSvg(svg: string, width: number, height: nu
             const currentTileWidth = Math.min(tileWidth, width - offsetX);
             const currentTileHeight = Math.min(tileHeight, height - offsetY);
 
+            // Move the container to show the correct portion of the image through the window
             await tiledWindow.webContents.executeJavaScript(
-              `new Promise((resolve) => {
-                const image = document.getElementById('scene');
-                if (image) {
-                  image.style.transform = 'translate(${-offsetX}px, ${-offsetY}px)';
+              `(function() {
+                const container = document.getElementById('container');
+                if (container) {
+                  container.style.transform = 'translate(${-offsetX}px, ${-offsetY}px)';
                 }
-                requestAnimationFrame(() => requestAnimationFrame(resolve));
-              })`,
-              false
+              })()`
             );
 
-            const capturedTile = await tiledWindow.webContents.capturePage({
-              x: 0,
-              y: 0,
-              width: currentTileWidth,
-              height: currentTileHeight,
-            });
+            // Wait for render to settle
+            await new Promise((resolve) => { setTimeout(resolve, 30); });
+
+            // Capture the entire fixed-size window
+            const capturedTile = await tiledWindow.webContents.capturePage();
             let tileImage = electronRuntime.nativeImage.createFromDataURL(`data:image/png;base64,${capturedTile.toPNG().toString('base64')}`);
             const tileSize = tileImage.getSize();
+            
+            // For edge tiles, we may need to crop the captured image to the actual tile size
+            let finalTileImage = tileImage;
             if (tileSize.width !== currentTileWidth || tileSize.height !== currentTileHeight) {
-              tileImage = tileImage.resize({
-                width: currentTileWidth,
-                height: currentTileHeight,
-                quality: 'best',
-              });
+              if (tileSize.width > currentTileWidth || tileSize.height > currentTileHeight) {
+                // Crop to the expected tile size
+                finalTileImage = tileImage.crop({
+                  x: 0,
+                  y: 0,
+                  width: currentTileWidth,
+                  height: currentTileHeight,
+                });
+              } else {
+                // Resize up if needed (shouldn't happen normally)
+                finalTileImage = tileImage.resize({
+                  width: currentTileWidth,
+                  height: currentTileHeight,
+                  quality: 'best',
+                });
+              }
             }
 
             copyBgraTileToRgba(
               stitchedRgba,
               width,
-              tileImage.toBitmap(),
+              height,
+              finalTileImage.toBitmap(),
               currentTileWidth,
               currentTileHeight,
               offsetX,
@@ -1058,5 +1186,14 @@ export function exportToSVG(nodes: Node[], optionsOrSize?: LegacySize | ExportRe
 export async function exportToPNG(nodes: Node[], optionsOrSize?: LegacySize | ExportRenderOptions): Promise<Buffer> {
   const scene = fitSceneForRaster(buildRenderScene(nodes, optionsOrSize));
   const svg = renderSceneToSvg(scene);
-  return (await tryRenderPngViaElectronSvg(svg, scene.width, scene.height)) ?? renderSceneToPngFallback(scene);
+  const pngViaSvg = await tryRenderPngViaElectronSvg(svg, scene.width, scene.height);
+  // If SVG-based renderer produced a PNG, validate its dimensions to guard against truncation or mis-sized outputs
+  if (pngViaSvg) {
+    const dims = readPngDimensions(pngViaSvg);
+    if (dims && dims.width === scene.width && dims.height === scene.height) {
+      return pngViaSvg;
+    }
+  }
+  // Fallback path
+  return renderSceneToPngFallback(scene);
 }
