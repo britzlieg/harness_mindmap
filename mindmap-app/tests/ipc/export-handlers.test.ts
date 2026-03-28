@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockIpcMain = { handle: vi.fn() };
 const mockDialog = { showSaveDialog: vi.fn() };
@@ -30,9 +30,19 @@ describe('export-handlers', () => {
       getURL: () => 'file://index.html',
     },
   });
+  const createUntrustedEvent = () => ({
+    sender: {
+      getURL: () => 'https://evil.example',
+    },
+  });
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it('registers export handlers', async () => {
@@ -108,5 +118,48 @@ describe('export-handlers', () => {
     }, 'C:/tmp/direct.png', { scalePercent: 999 })).rejects.toThrow(
       'PNG scale percent must be an integer between 50 and 400.'
     );
+  });
+
+  it('rejects untrusted sender for privileged export channels', async () => {
+    const { registerExportHandlers } = await import('../../electron/ipc/export-handlers');
+    registerExportHandlers();
+
+    const toPngHandler = mockIpcMain.handle.mock.calls.find((call) => call[0] === 'export:toPNG')?.[1];
+    await expect(toPngHandler(
+      createUntrustedEvent(),
+      { nodes: [], metadata: { layoutType: 'mindmap', theme: 'default' } },
+      'C:/tmp/direct.png'
+    )).rejects.toThrow('Unauthorized IPC sender.');
+  });
+
+  it('rejects invalid output path for SVG export', async () => {
+    const { registerExportHandlers } = await import('../../electron/ipc/export-handlers');
+    registerExportHandlers();
+
+    const toSvgHandler = mockIpcMain.handle.mock.calls.find((call) => call[0] === 'export:toSVG')?.[1];
+    await expect(toSvgHandler(
+      createTrustedEvent(),
+      { nodes: [], metadata: { layoutType: 'mindmap', theme: 'default' } },
+      'C:/tmp/out.txt'
+    )).rejects.toThrow('Invalid export output path.');
+    expect(mockWriteFileSync).not.toHaveBeenCalled();
+  });
+
+  it('rejects invalid payload for export:saveAs', async () => {
+    const { registerExportHandlers } = await import('../../electron/ipc/export-handlers');
+    registerExportHandlers();
+
+    const saveAsHandler = mockIpcMain.handle.mock.calls.find((call) => call[0] === 'export:saveAs')?.[1];
+    await expect(saveAsHandler(createTrustedEvent(), { nodes: [] }, 'png')).rejects.toThrow(
+      'Invalid mindmap payload.'
+    );
+  });
+
+  it('rejects invalid payload for export:toMarkdown', async () => {
+    const { registerExportHandlers } = await import('../../electron/ipc/export-handlers');
+    registerExportHandlers();
+
+    const toMarkdownHandler = mockIpcMain.handle.mock.calls.find((call) => call[0] === 'export:toMarkdown')?.[1];
+    await expect(toMarkdownHandler(createTrustedEvent(), {})).rejects.toThrow('Nodes must be an array.');
   });
 });

@@ -1,6 +1,7 @@
 import zlib from 'zlib';
 import { describe, it, expect } from 'vitest';
-import { exportToMarkdown, exportToPNG, exportToSVG } from '../../electron/services/export-service';
+import { buildExportRenderScene, exportToMarkdown, exportToPNG, exportToSVG } from '../../electron/services/export-service';
+import { getNodeDepthBackgroundColor, themes } from '../../src/themes';
 import type { FileMetadata, LayoutType, Node } from '../../src/types';
 
 function makeNode(id: string, text: string, children: Node[] = []): Node {
@@ -67,6 +68,53 @@ describe('export-service', () => {
     expect(svg).toContain('Child');
     expect(svg).toContain('<path d="M ');
     expect(svg).toContain('fill="#f0f9ff"');
+  });
+
+  it('applies depth-based background colors in export render scene', () => {
+    const grandchild = makeNode('gc', 'Grandchild');
+    grandchild.parentId = 'c1';
+    const childWithChildren = makeNode('c1', 'Child With Children', [grandchild]);
+    childWithChildren.parentId = 'r1';
+    const childLeaf = makeNode('c2', 'Child Leaf');
+    childLeaf.parentId = 'r1';
+    const root = makeNode('r1', 'Root', [childWithChildren, childLeaf]);
+
+    const scene = buildExportRenderScene([root], {
+      metadata: makeMetadata('mindmap', 'default'),
+      minWidth: 400,
+      minHeight: 260,
+      padding: 24,
+    });
+
+    const rootSceneNode = scene.nodes.find((node) => node.id === 'r1');
+    const childWithChildrenSceneNode = scene.nodes.find((node) => node.id === 'c1');
+    const childLeafSceneNode = scene.nodes.find((node) => node.id === 'c2');
+    const grandchildSceneNode = scene.nodes.find((node) => node.id === 'gc');
+    const rootColor = themes.default.rootNode.backgroundColor!;
+
+    expect(rootSceneNode?.style.backgroundColor).toBe(getNodeDepthBackgroundColor(rootColor, 0));
+    expect(childWithChildrenSceneNode?.style.backgroundColor).toBe(getNodeDepthBackgroundColor(rootColor, 1));
+    expect(childLeafSceneNode?.style.backgroundColor).toBe(getNodeDepthBackgroundColor(rootColor, 1));
+    expect(grandchildSceneNode?.style.backgroundColor).toBe(getNodeDepthBackgroundColor(rootColor, 2));
+  });
+
+  it('keeps explicit node background color in export render scene', () => {
+    const child = makeNode('c1', 'Child');
+    child.parentId = 'r1';
+    child.style = {
+      backgroundColor: '#ff0000',
+    };
+    const root = makeNode('r1', 'Root', [child]);
+
+    const scene = buildExportRenderScene([root], {
+      metadata: makeMetadata('mindmap', 'default'),
+      minWidth: 320,
+      minHeight: 220,
+      padding: 24,
+    });
+    const childSceneNode = scene.nodes.find((node) => node.id === 'c1');
+
+    expect(childSceneNode?.style.backgroundColor).toBe('#ff0000');
   });
 
   it('generates valid PNG binary', async () => {

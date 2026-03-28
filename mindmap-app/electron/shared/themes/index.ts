@@ -1,4 +1,9 @@
 import type { Theme } from '../types';
+export {
+  NODE_DEPTH_COLOR_HUE_STEP,
+  getNodeDepthBackgroundColor,
+  getDepthAwareNodeThemeStyle,
+} from './node-depth-colors';
 
 export const themes: Record<string, Theme> = {
   default: {

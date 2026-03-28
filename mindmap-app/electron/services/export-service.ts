@@ -1,7 +1,7 @@
 import zlib from 'zlib';
 import type { FileMetadata, Node, NodeStyle } from '../shared/types';
 import { normalizeLayoutType } from '../shared/types';
-import { getTheme, normalizeThemeName } from '../shared/themes';
+import { getDepthAwareNodeThemeStyle, getTheme, normalizeThemeName } from '../shared/themes';
 import { ensureNodeText } from '../shared/utils/node-text';
 import type { ConnectionPath, Point } from '../shared/utils/geometry';
 import { calculateConnectionPath, cubicBezier } from '../shared/utils/geometry';
@@ -333,9 +333,7 @@ function buildRenderScene(nodes: Node[], optionsOrSize?: LegacySize | ExportRend
     const rect = nodeRects.get(entry.node.id);
     if (!rect) continue;
     const hasChildren = (entry.node.children?.length ?? 0) > 0;
-    const baseThemeStyle = entry.depth === 0
-      ? theme.rootNode
-      : (hasChildren ? theme.branchNode : theme.leafNode);
+    const baseThemeStyle = getDepthAwareNodeThemeStyle(theme, entry.depth, hasChildren);
     const style = mergeNodeStyles(baseThemeStyle, entry.node.style ?? {});
 
     sceneNodes.push({

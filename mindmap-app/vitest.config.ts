@@ -8,6 +8,18 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     include: ['tests/**/*.test.{ts,tsx}'],
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'json-summary', 'html'],
+      reportsDirectory: 'coverage',
+      include: ['src/**/*.{ts,tsx}', 'electron/**/*.ts'],
+      exclude: [
+        'tests/**',
+        '**/*.d.ts',
+        'src/main.tsx',
+        'electron/main.ts',
+      ],
+    },
   },
   resolve: {
     alias: {

@@ -7,7 +7,7 @@ import { ConnectionCanvas } from './ConnectionCanvas';
 import { CanvasControls } from './CanvasControls';
 import type { Node } from '../../types';
 import { computeLayout } from '../../utils/layout-algorithms';
-import { getTheme, normalizeThemeName } from '../../themes';
+import { getDepthAwareNodeThemeStyle, getTheme, normalizeThemeName } from '../../themes';
 
 const NODE_WIDTH = 120;
 const NODE_HEIGHT = 36;
@@ -161,9 +161,7 @@ export function MindMapCanvas() {
           const rect = nodeRects.get(node.id);
           if (!rect) return null;
           const hasChildren = (node.children?.length ?? 0) > 0;
-          const themeStyle = depth === 0
-            ? activeTheme.rootNode
-            : (hasChildren ? activeTheme.branchNode : activeTheme.leafNode);
+          const themeStyle = getDepthAwareNodeThemeStyle(activeTheme, depth, hasChildren);
 
           return (
             <NodeRenderer

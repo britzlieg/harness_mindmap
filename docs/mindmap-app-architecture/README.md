@@ -14,9 +14,13 @@
    变更影响半径地图：改动前快速评估波及范围。
 5. `04-refactor-architecture-and-code-quality.md`  
    **最新重构同步**：`refactor-architecture-and-code-quality` 变更落地说明（共享层、IPC 安全、导出模块拆分、回归验证）。
+6. `05-test-suite-hardening-follow-up.md`
+   测试体系补强后续说明：覆盖率能力、关键边界补测与日志噪音治理的后续落地清单。
 
 ## 最新状态（2026-03-27）
 
-- OpenSpec change: `refactor-architecture-and-code-quality`
-- 实施结果：22/22 tasks complete
-- 重构目标：在不改变用户可见功能前提下，提升分层清晰度、安全性、可维护性与可测试性。
+- Active OpenSpec changes: `none`
+- Recently archived changes:
+  - `2026-03-27-harden-test-suite-gaps`（spec 已同步到主 specs；归档时 tasks 仍为 0/12，需后续继续实施）
+  - `refactor-architecture-and-code-quality`（22/22 tasks complete）
+- 当前建议：涉及测试体系与跨进程边界改动时，优先参考 `05-test-suite-hardening-follow-up.md` 与 `04-refactor-architecture-and-code-quality.md`。

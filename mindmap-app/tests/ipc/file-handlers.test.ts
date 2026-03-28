@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockIpcMain = { handle: vi.fn() };
 const mockShowOpenDialog = vi.fn();
@@ -25,9 +25,19 @@ describe('file-handlers', () => {
       getURL: () => 'file://index.html',
     },
   });
+  const createUntrustedEvent = () => ({
+    sender: {
+      getURL: () => 'https://evil.example',
+    },
+  });
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it('should register file:open handler', async () => {
@@ -122,6 +132,48 @@ describe('file-handlers', () => {
     const openHandler = mockIpcMain.handle.mock.calls.find((call) => call[0] === 'file:open')?.[1];
     await expect(openHandler(createTrustedEvent())).rejects.toThrow(
       'Unsupported legacy SQLite .mindmap file. Please migrate it with a compatible older build first.'
+    );
+  });
+
+  it('rejects untrusted sender for file:open', async () => {
+    const { registerFileHandlers } = await import('../../electron/ipc/file-handlers');
+    registerFileHandlers();
+
+    const openHandler = mockIpcMain.handle.mock.calls.find((call) => call[0] === 'file:open')?.[1];
+    await expect(openHandler(createUntrustedEvent())).rejects.toThrow('Unauthorized IPC sender.');
+  });
+
+  it('rejects invalid payload for file:save', async () => {
+    const { registerFileHandlers } = await import('../../electron/ipc/file-handlers');
+    registerFileHandlers();
+
+    const saveHandler = mockIpcMain.handle.mock.calls.find((call) => call[0] === 'file:save')?.[1];
+    await expect(saveHandler(createTrustedEvent(), 'C:/tmp/test.mindmap', { metadata: {} })).rejects.toThrow(
+      'Save mindmap failed'
+    );
+    expect(mockSaveMindmapFile).not.toHaveBeenCalled();
+  });
+
+  it('rejects invalid path for file:save', async () => {
+    const { registerFileHandlers } = await import('../../electron/ipc/file-handlers');
+    registerFileHandlers();
+
+    const saveHandler = mockIpcMain.handle.mock.calls.find((call) => call[0] === 'file:save')?.[1];
+    await expect(saveHandler(
+      createTrustedEvent(),
+      'C:/tmp/test.txt',
+      { nodes: [], metadata: { title: 'valid' } }
+    )).rejects.toThrow('Invalid save path for mindmap file.');
+    expect(mockSaveMindmapFile).not.toHaveBeenCalled();
+  });
+
+  it('rejects invalid payload for file:saveAs', async () => {
+    const { registerFileHandlers } = await import('../../electron/ipc/file-handlers');
+    registerFileHandlers();
+
+    const saveAsHandler = mockIpcMain.handle.mock.calls.find((call) => call[0] === 'file:saveAs')?.[1];
+    await expect(saveAsHandler(createTrustedEvent(), { nodes: [] })).rejects.toThrow(
+      'Invalid mindmap file format.'
     );
   });
 });

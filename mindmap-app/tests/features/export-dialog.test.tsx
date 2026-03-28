@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ExportDialog } from '../../src/components/Dialogs/ExportDialog';
 import { EXPORT_TEXT } from '../../src/constants/ui-text';
@@ -71,6 +71,8 @@ vi.mock('../../src/stores/mindmap-store', () => {
 describe('ExportDialog', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
     storeState = {
       nodes: [createNode()],
       metadata: createMetadata(),
@@ -85,6 +87,10 @@ describe('ExportDialog', () => {
       cb(performance.now());
       return 1;
     };
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it('shows localized labels and includes PNG option', () => {
@@ -163,12 +169,14 @@ describe('ExportDialog', () => {
   });
 
   it('keeps dialog open when export fails', async () => {
+    const errorSpy = vi.spyOn(console, 'error');
     saveAs.mockRejectedValue(new Error('write failed'));
     render(<ExportDialog />);
 
     fireEvent.click(screen.getByText(EXPORT_TEXT.formats.png));
 
     await waitFor(() => expect(saveAs).toHaveBeenCalledTimes(1));
+    expect(errorSpy).toHaveBeenCalledWith('Export failed:', expect.any(Error));
     expect(toggleExportDialog).not.toHaveBeenCalled();
   });
 });

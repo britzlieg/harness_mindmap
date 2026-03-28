@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { MainToolbar } from '../../src/components/Toolbar/MainToolbar';
 import { useFileOperations } from '../../src/hooks/useFileOperations';
@@ -49,6 +49,7 @@ describe('file operations', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
 
     (window as any).electronAPI = {
       file: {
@@ -78,6 +79,10 @@ describe('file operations', () => {
       shortcutsHelpOpen: false,
       exportDialogOpen: false,
     });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it('triggers new and save from toolbar actions', async () => {
@@ -215,6 +220,7 @@ describe('file operations', () => {
   });
 
   it('keeps current document unchanged when open fails', async () => {
+    const errorSpy = vi.spyOn(console, 'error');
     const initialState = useMindmapStore.getState();
     fileOpen.mockRejectedValue(new Error('broken file'));
     renderHook(() => useFileOperations());
@@ -227,6 +233,7 @@ describe('file operations', () => {
     }));
 
     await waitFor(() => expect(fileOpen).toHaveBeenCalledTimes(1));
+    expect(errorSpy).toHaveBeenCalledWith('Failed to open file:', expect.any(Error));
     expect(useMindmapStore.getState().filePath).toBe(initialState.filePath);
     expect(useMindmapStore.getState().metadata).toEqual(initialState.metadata);
     expect(useMindmapStore.getState().nodes).toEqual(initialState.nodes);

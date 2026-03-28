@@ -2,7 +2,7 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import { MindMapCanvas } from '../../src/components/Canvas/MindMapCanvas';
 import type { Node, FileMetadata } from '../../src/types';
-import { themes } from '../../src/themes';
+import { getNodeDepthBackgroundColor, themes } from '../../src/themes';
 import { CANVAS_CONTROLS_TEXT } from '../../src/constants/ui-text';
 
 const mockSelectNode = vi.fn();
@@ -10,6 +10,8 @@ const mockDeselectAll = vi.fn();
 const mockZoomIn = vi.fn();
 const mockZoomOut = vi.fn();
 const mockResetZoom = vi.fn();
+const mockPan = vi.fn();
+const mockSetScale = vi.fn();
 const mockUpdateNodeText = vi.fn();
 let mockCanvasContext: any;
 
@@ -23,6 +25,8 @@ let canvasState = {
   zoomIn: mockZoomIn,
   zoomOut: mockZoomOut,
   resetZoom: mockResetZoom,
+  pan: mockPan,
+  setScale: mockSetScale,
 };
 
 let mindmapNodes: Node[] = [];
@@ -45,15 +49,6 @@ vi.mock('../../src/stores/mindmap-store', () => ({
     nodes: mindmapNodes,
     metadata: mindmapMetadata,
     updateNodeText: mockUpdateNodeText,
-  }),
-}));
-
-vi.mock('../../src/hooks/useCanvasInteraction', () => ({
-  useCanvasInteraction: () => ({
-    handleMouseDown: vi.fn(),
-    handleMouseMove: vi.fn(),
-    handleMouseUp: vi.fn(),
-    handleWheel: vi.fn(),
   }),
 }));
 
@@ -119,6 +114,8 @@ describe('MindMapCanvas', () => {
       zoomIn: mockZoomIn,
       zoomOut: mockZoomOut,
       resetZoom: mockResetZoom,
+      pan: mockPan,
+      setScale: mockSetScale,
     };
     mindmapNodes = [];
     mindmapMetadata = {
@@ -206,6 +203,25 @@ describe('MindMapCanvas', () => {
     expect(mockUpdateNodeText).toHaveBeenCalledWith('r1', 'Renamed Root');
   });
 
+  it('forwards wheel zoom interaction to canvas store setScale', () => {
+    render(<MindMapCanvas />);
+    const canvas = screen.getByTestId('mindmap-canvas');
+
+    fireEvent.wheel(canvas, { deltaY: -100 });
+    expect(mockSetScale).toHaveBeenCalledWith(1.1);
+  });
+
+  it('forwards pan interaction to canvas store pan', () => {
+    render(<MindMapCanvas />);
+    const canvas = screen.getByTestId('mindmap-canvas');
+
+    fireEvent.mouseDown(canvas, { button: 0, altKey: true, clientX: 10, clientY: 10 });
+    fireEvent.mouseMove(canvas, { clientX: 25, clientY: 22 });
+    fireEvent.mouseUp(canvas);
+
+    expect(mockPan).toHaveBeenCalledWith(15, 12);
+  });
+
   it('applies active theme to canvas and connection styles', () => {
     mindmapMetadata = { ...mindmapMetadata, theme: 'dark' };
     mindmapNodes = [createMockNode({ id: 'r1', text: 'Root' })];
@@ -230,10 +246,11 @@ describe('MindMapCanvas', () => {
     expect(mockCanvasContext.strokeStyle).toBe(themes.default.connection.color);
   });
 
-  it('applies root, branch and leaf theme styles by node role', () => {
+  it('applies depth-based color wheel backgrounds', () => {
     const leaf = createMockNode({ id: 'l1', parentId: 'b1', text: 'Leaf', children: [] });
     const branch = createMockNode({ id: 'b1', parentId: 'r1', text: 'Branch', children: [leaf], style: {} });
-    const root = createMockNode({ id: 'r1', text: 'Root', children: [branch], style: {} });
+    const siblingAtSameDepth = createMockNode({ id: 's1', parentId: 'r1', text: 'Sibling', children: [], style: {} });
+    const root = createMockNode({ id: 'r1', text: 'Root', children: [branch, siblingAtSameDepth], style: {} });
     mindmapNodes = [root];
 
     render(<MindMapCanvas />);
@@ -241,10 +258,13 @@ describe('MindMapCanvas', () => {
     const rootNode = document.querySelector('[data-node-id="r1"]') as HTMLElement;
     const branchNode = document.querySelector('[data-node-id="b1"]') as HTMLElement;
     const leafNode = document.querySelector('[data-node-id="l1"]') as HTMLElement;
+    const siblingNode = document.querySelector('[data-node-id="s1"]') as HTMLElement;
+    const rootColor = themes.default.rootNode.backgroundColor!;
 
-    expect(rootNode.style.backgroundColor).toBe(hexToRgb(themes.default.rootNode.backgroundColor!));
-    expect(branchNode.style.backgroundColor).toBe(hexToRgb(themes.default.branchNode.backgroundColor!));
-    expect(leafNode.style.backgroundColor).toBe(hexToRgb(themes.default.leafNode.backgroundColor!));
+    expect(rootNode.style.backgroundColor).toBe(hexToRgb(getNodeDepthBackgroundColor(rootColor, 0)));
+    expect(branchNode.style.backgroundColor).toBe(hexToRgb(getNodeDepthBackgroundColor(rootColor, 1)));
+    expect(siblingNode.style.backgroundColor).toBe(hexToRgb(getNodeDepthBackgroundColor(rootColor, 1)));
+    expect(leafNode.style.backgroundColor).toBe(hexToRgb(getNodeDepthBackgroundColor(rootColor, 2)));
   });
 
   it('keeps node explicit style values while filling missing fields from theme', () => {
@@ -265,6 +285,43 @@ describe('MindMapCanvas', () => {
     expect(rootNode.style.backgroundColor).toBe(hexToRgb('#ff0000'));
     expect(rootNode.style.color).toBe(hexToRgb(themes.dark.rootNode.textColor!));
     expect(rootNode.style.fontWeight).toBe(String(themes.dark.rootNode.fontWeight));
+  });
+
+  it('recomputes default node background when node depth changes', () => {
+    const node = createMockNode({ id: 'n1', parentId: 'c1', text: 'Node', style: {} });
+    const child = createMockNode({ id: 'c1', parentId: 'r1', text: 'Child', children: [node], style: {} });
+    mindmapNodes = [createMockNode({ id: 'r1', text: 'Root', children: [child], style: {} })];
+
+    const { rerender } = render(<MindMapCanvas />);
+    const nodeBefore = document.querySelector('[data-node-id="n1"]') as HTMLElement;
+    const rootColor = themes.default.rootNode.backgroundColor!;
+    expect(nodeBefore.style.backgroundColor).toBe(hexToRgb(getNodeDepthBackgroundColor(rootColor, 2)));
+
+    const movedNode = createMockNode({ ...node, parentId: 'r1', children: [] });
+    mindmapNodes = [createMockNode({ id: 'r1', text: 'Root', children: [movedNode], style: {} })];
+    rerender(<MindMapCanvas />);
+
+    const nodeAfter = document.querySelector('[data-node-id="n1"]') as HTMLElement;
+    expect(nodeAfter.style.backgroundColor).toBe(hexToRgb(getNodeDepthBackgroundColor(rootColor, 1)));
+  });
+
+  it('recomputes depth colors when active theme changes', () => {
+    const child = createMockNode({ id: 'c1', parentId: 'r1', text: 'Child', style: {} });
+    mindmapNodes = [createMockNode({ id: 'r1', text: 'Root', children: [child], style: {} })];
+
+    const { rerender } = render(<MindMapCanvas />);
+    const childInDefaultTheme = document.querySelector('[data-node-id="c1"]') as HTMLElement;
+    expect(childInDefaultTheme.style.backgroundColor).toBe(
+      hexToRgb(getNodeDepthBackgroundColor(themes.default.rootNode.backgroundColor!, 1))
+    );
+
+    mindmapMetadata = { ...mindmapMetadata, theme: 'ocean' };
+    rerender(<MindMapCanvas />);
+
+    const childInOceanTheme = document.querySelector('[data-node-id="c1"]') as HTMLElement;
+    expect(childInOceanTheme.style.backgroundColor).toBe(
+      hexToRgb(getNodeDepthBackgroundColor(themes.ocean.rootNode.backgroundColor!, 1))
+    );
   });
 
   it('recomputes node positions when layout type changes', () => {
