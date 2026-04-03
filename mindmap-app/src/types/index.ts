@@ -16,6 +16,7 @@ export type {
   LayoutPositionMap,
   ExportFormat,
   ExportScaleOptions,
+  ExportPreviewResult,
 } from '../../electron/shared/types';
 
 import type {
@@ -26,6 +27,7 @@ import type {
   LayoutPositionMap,
   ExportFormat,
   ExportScaleOptions,
+  ExportPreviewResult,
 } from '../../electron/shared/types';
 
 export interface ElectronAPI {
@@ -51,6 +53,11 @@ export interface ElectronAPI {
       format: ExportFormat,
       options?: ExportScaleOptions
     ): Promise<string | null>;
+    generatePreview(
+      data: MindmapPayload,
+      format: ExportFormat,
+      options?: ExportScaleOptions
+    ): Promise<ExportPreviewResult>;
   };
   window: {
     minimize(): Promise<void>;

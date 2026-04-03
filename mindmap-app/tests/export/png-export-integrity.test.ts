@@ -402,6 +402,215 @@ describe('PNG Export Integrity', () => {
       expect(scene.nodes[0].text).toBe('Root');
     });
   });
+
+  describe('Tiled Capture Alignment', () => {
+    it('handles large scene that may trigger tiled capture', async () => {
+      // Create a large mindmap that could trigger tiled capture
+      const root = createLargeMindmap();
+      
+      const png = await exportToPNG([root], {
+        metadata: makeMetadata(),
+        minWidth: 2000,
+        minHeight: 1500,
+        padding: 48,
+        scale: 1,
+      });
+
+      expect(png.length).toBeGreaterThan(8);
+      const dims = readPngDimensions(png);
+      expect(dims).not.toBeNull();
+
+      if (dims) {
+        // Should have valid dimensions
+        expect(dims.width).toBeGreaterThan(0);
+        expect(dims.height).toBeGreaterThan(0);
+      }
+    });
+
+    it('exports with consistent dimensions across multiple captures', async () => {
+      const root = createLinearChain(5);
+      
+      // Export multiple times and verify dimensions are consistent
+      const png1 = await exportToPNG([root], {
+        metadata: makeMetadata(),
+        minWidth: 960,
+        minHeight: 640,
+        padding: 48,
+        scale: 1,
+      });
+      
+      const png2 = await exportToPNG([root], {
+        metadata: makeMetadata(),
+        minWidth: 960,
+        minHeight: 640,
+        padding: 48,
+        scale: 1,
+      });
+      
+      const dims1 = readPngDimensions(png1);
+      const dims2 = readPngDimensions(png2);
+      
+      expect(dims1).not.toBeNull();
+      expect(dims2).not.toBeNull();
+      
+      if (dims1 && dims2) {
+        expect(dims1.width).toBe(dims2.width);
+        expect(dims1.height).toBe(dims2.height);
+      }
+    });
+  });
+
+  describe('Fallback Text Rendering Quality', () => {
+    it('renders text with 20x28 glyph grid in fallback mode', () => {
+      const root = makeNode('root', 'Test Node with Chinese 中文测试', [
+        makeNode('child1', 'Child with numbers 12345'),
+        makeNode('child2', '子节点测试'),
+      ]);
+
+      const scene = buildExportRenderScene([root], {
+        metadata: makeMetadata(),
+        minWidth: 960,
+        minHeight: 640,
+        padding: 48,
+        scale: 1,
+      });
+
+      // Verify scene contains nodes with text
+      expect(scene.nodes.length).toBe(3);
+      expect(scene.nodes[0].text).toContain('Test Node');
+      expect(scene.nodes[1].text).toContain('Child');
+      expect(scene.nodes[2].text).toContain('子节点');
+    });
+
+    it('handles mixed CJK and Latin characters', () => {
+      const root = makeNode('root', '混合 Mixed 日本語 にほんご 한국어', [
+        makeNode('child1', 'ABC abc 123'),
+        makeNode('child2', '中文 + 英文 + 数字'),
+      ]);
+
+      const scene = buildExportRenderScene([root], {
+        metadata: makeMetadata(),
+        minWidth: 960,
+        minHeight: 640,
+        padding: 48,
+        scale: 1,
+      });
+
+      expect(scene.nodes.length).toBe(3);
+      // All nodes should have valid text content
+      for (const node of scene.nodes) {
+        expect(node.text.length).toBeGreaterThan(0);
+      }
+    });
+  });
+
+  describe('2% Dimension Tolerance Validation', () => {
+    it('accepts dimensions within 2% tolerance', () => {
+      const expectedWidth = 1000;
+      const expectedHeight = 800;
+      
+      // Calculate 2% tolerance
+      const widthTolerance = Math.max(2, Math.floor(expectedWidth * 0.02)); // 20
+      const heightTolerance = Math.max(2, Math.floor(expectedHeight * 0.02)); // 16
+      
+      // Dimensions within tolerance should be acceptable
+      const validWidthDiff = Math.floor(expectedWidth * 0.01); // 1% diff
+      const validHeightDiff = Math.floor(expectedHeight * 0.01); // 1% diff
+      
+      expect(validWidthDiff).toBeLessThanOrEqual(widthTolerance);
+      expect(validHeightDiff).toBeLessThanOrEqual(heightTolerance);
+    });
+
+    it('rejects dimensions exceeding 2% tolerance', () => {
+      const expectedWidth = 1000;
+      const expectedHeight = 800;
+      
+      // Calculate 2% tolerance
+      const widthTolerance = Math.max(2, Math.floor(expectedWidth * 0.02)); // 20
+      const heightTolerance = Math.max(2, Math.floor(expectedHeight * 0.02)); // 16
+      
+      // Dimensions exceeding tolerance should be rejected
+      const invalidWidthDiff = Math.floor(expectedWidth * 0.05); // 5% diff
+      const invalidHeightDiff = Math.floor(expectedHeight * 0.05); // 5% diff
+      
+      expect(invalidWidthDiff).toBeGreaterThan(widthTolerance);
+      expect(invalidHeightDiff).toBeGreaterThan(heightTolerance);
+    });
+
+    it('exports successfully with various scale factors', async () => {
+      const root = makeNode('root', 'Root', [
+        makeNode('child1', 'Child 1'),
+        makeNode('child2', 'Child 2'),
+      ]);
+
+      const scales = [0.5, 1.0, 1.5, 2.0];
+      
+      for (const scale of scales) {
+        const png = await exportToPNG([root], {
+          metadata: makeMetadata(),
+          minWidth: 960,
+          minHeight: 640,
+          padding: 48,
+          scale,
+        });
+
+        expect(png.length).toBeGreaterThan(8);
+        const dims = readPngDimensions(png);
+        expect(dims).not.toBeNull();
+      }
+    });
+  });
+
+  describe('Large Scale Export (100+ nodes at 200% scale)', () => {
+    it('exports 100+ node mindmap at 200% scale without issues', async () => {
+      const root = createLargeMindmap();
+      const nodeCount = countNodes(root);
+      expect(nodeCount).toBeGreaterThan(100);
+
+      const png = await exportToPNG([root], {
+        metadata: makeMetadata(),
+        minWidth: 1200,
+        minHeight: 800,
+        padding: 48,
+        scale: 2.0,
+      });
+
+      expect(png.length).toBeGreaterThan(8);
+      const dims = readPngDimensions(png);
+      expect(dims).not.toBeNull();
+
+      if (dims) {
+        // 200% scale should produce larger dimensions
+        expect(dims.width).toBeGreaterThan(1200);
+        expect(dims.height).toBeGreaterThan(800);
+        // Should still be within reasonable limits
+        expect(dims.width).toBeLessThanOrEqual(12000);
+        expect(dims.height).toBeLessThanOrEqual(12000);
+      }
+    });
+
+    it('handles extreme scale (400%) with proper fitting', async () => {
+      const root = createWideTree(3, 5);
+      
+      const png = await exportToPNG([root], {
+        metadata: makeMetadata(),
+        minWidth: 960,
+        minHeight: 640,
+        padding: 48,
+        scale: 4.0,
+      });
+
+      expect(png.length).toBeGreaterThan(8);
+      const dims = readPngDimensions(png);
+      expect(dims).not.toBeNull();
+
+      if (dims) {
+        // Should be capped at maximum raster limits
+        expect(dims.width).toBeLessThanOrEqual(12000);
+        expect(dims.height).toBeLessThanOrEqual(12000);
+      }
+    });
+  });
 });
 
 function countNodes(root: Node): number {

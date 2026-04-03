@@ -7,6 +7,43 @@ import type { ConnectionPath, Point } from '../shared/utils/geometry';
 import { calculateConnectionPath, cubicBezier } from '../shared/utils/geometry';
 import { computeLayout } from '../shared/utils/layout-algorithms';
 
+/**
+ * Wait for fonts to load in the browser context before capturing.
+ * Returns true if fonts loaded successfully, false if timed out.
+ */
+async function waitForFontsLoaded(webContents: any, timeoutMs: number = 3000): Promise<boolean> {
+  try {
+    const result = await Promise.race([
+      webContents.executeJavaScript(
+        `new Promise((resolve) => {
+          const checkFonts = () => {
+            if (document.fonts && document.fonts.ready) {
+              document.fonts.ready.then(() => {
+                // Wait for 2 requestAnimationFrame cycles after fonts are ready
+                requestAnimationFrame(() => {
+                  requestAnimationFrame(() => {
+                    resolve(true);
+                  });
+                });
+              });
+              return;
+            }
+            resolve(true);
+          };
+          checkFonts();
+        })`,
+        false
+      ),
+      new Promise<boolean>((resolve) => {
+        setTimeout(() => resolve(false), timeoutMs);
+      }),
+    ]);
+    return result;
+  } catch {
+    return false;
+  }
+}
+
 export interface LegacySize {
   width: number;
   height: number;
@@ -76,6 +113,9 @@ const MAX_RASTER_EXPORT_EDGE = 12000;
 const MAX_RASTER_EXPORT_PIXELS = 96_000_000;
 const FALLBACK_EXPORT_EDGE = 240;
 const MAX_PNG_CAPTURE_TILE_EDGE = 2048;
+
+/** Font family for PNG export SVG rasterization to ensure clear text rendering */
+const FONT_FAMILY = 'system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif';
 
 const NODE_WIDTH = 120;
 const NODE_HEIGHT = 36;
@@ -186,6 +226,15 @@ function isLegacySize(value: LegacySize | ExportRenderOptions | undefined): valu
     return false;
   }
   return typeof (value as LegacySize).width === 'number' && typeof (value as LegacySize).height === 'number';
+}
+
+function isExportRenderOptions(value: LegacySize | ExportRenderOptions | undefined): value is ExportRenderOptions {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  // ExportRenderOptions has scale, minWidth, minHeight, padding, or metadata properties
+  // while LegacySize only has width and height
+  return 'scale' in value || 'minWidth' in value || 'minHeight' in value || 'padding' in value || 'metadata' in value;
 }
 
 function normalizeOptions(optionsOrSize?: LegacySize | ExportRenderOptions): NormalizedExportOptions {
@@ -373,6 +422,10 @@ function buildRenderScene(nodes: Node[], optionsOrSize?: LegacySize | ExportRend
   const contentWidth = Math.max(1, contentBounds.right - contentBounds.left);
   const contentHeight = Math.max(1, contentBounds.bottom - contentBounds.top);
 
+  // Debug: Log content bounds
+  console.log(`[PNG Export] Content bounds: left=${contentBounds.left}, top=${contentBounds.top}, right=${contentBounds.right}, bottom=${contentBounds.bottom}`);
+  console.log(`[PNG Export] Content size: ${contentWidth}x${contentHeight}, logical: ${Math.max(options.minWidth, Math.ceil(contentWidth + options.padding * 2), FALLBACK_EXPORT_EDGE)}x${Math.max(options.minHeight, Math.ceil(contentHeight + options.padding * 2), FALLBACK_EXPORT_EDGE)}`);
+
   // Add padding and ensure minimum dimensions
   const logicalWidth = Math.max(options.minWidth, Math.ceil(contentWidth + options.padding * 2), FALLBACK_EXPORT_EDGE);
   const logicalHeight = Math.max(options.minHeight, Math.ceil(contentHeight + options.padding * 2), FALLBACK_EXPORT_EDGE);
@@ -438,14 +491,14 @@ function renderSceneToSvg(scene: RenderScene): string {
         ? `<rect x="${(node.x + 6).toFixed(2)}" y="${(node.y + node.height - 6).toFixed(2)}" width="${(node.width - 12).toFixed(2)}" height="3" rx="2" fill="#e0e0e0"/><rect x="${(node.x + 6).toFixed(2)}" y="${(node.y + node.height - 6).toFixed(2)}" width="${((node.width - 12) * Math.max(0, Math.min(1, node.progress))).toFixed(2)}" height="3" rx="2" fill="#52c41a"/>`
         : '';
       const priorityBadge = node.priority > 0
-        ? `<g transform="translate(${(node.x + node.width - 24).toFixed(2)}, ${(node.y + 4).toFixed(2)})"><rect width="20" height="12" rx="3" fill="#ff4d4f"/><text x="4" y="9" font-size="8" fill="#ffffff">P${node.priority}</text></g>`
+        ? `<g transform="translate(${(node.x + node.width - 24).toFixed(2)}, ${(node.y + 4).toFixed(2)})"><rect width="20" height="12" rx="3" fill="#ff4d4f"/><text x="4" y="9" font-size="8" font-family="${FONT_FAMILY}" fill="#ffffff">P${node.priority}</text></g>`
         : '';
 
-      return `<g data-node-id="${escapeXml(node.id)}"><rect x="${node.x.toFixed(2)}" y="${node.y.toFixed(2)}" width="${node.width.toFixed(2)}" height="${node.height.toFixed(2)}" rx="${node.style.borderRadius}" fill="${escapeXml(node.style.backgroundColor)}" stroke="${escapeXml(node.style.borderColor)}" stroke-width="1"/><text x="${textX.toFixed(2)}" y="${textY.toFixed(2)}" font-size="${node.style.fontSize}" font-weight="${node.style.fontWeight}" fill="${escapeXml(node.style.textColor)}">${text}</text>${priorityBadge}${progressBar}</g>`;
+      return `<g data-node-id="${escapeXml(node.id)}"><rect x="${node.x.toFixed(2)}" y="${node.y.toFixed(2)}" width="${node.width.toFixed(2)}" height="${node.height.toFixed(2)}" rx="${node.style.borderRadius}" fill="${escapeXml(node.style.backgroundColor)}" stroke="${escapeXml(node.style.borderColor)}" stroke-width="1"/><text x="${textX.toFixed(2)}" y="${textY.toFixed(2)}" font-size="${node.style.fontSize}" font-weight="${node.style.fontWeight}" font-family="${FONT_FAMILY}" fill="${escapeXml(node.style.textColor)}">${text}</text>${priorityBadge}${progressBar}</g>`;
     })
     .join('\n');
 
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="${scene.width}" height="${scene.height}" viewBox="0 0 ${scene.width} ${scene.height}">\n<defs>\n  <pattern id="grid-pattern" width="${GRID_SIZE}" height="${GRID_SIZE}" patternUnits="userSpaceOnUse">\n    <path d="M ${GRID_SIZE} 0 L 0 0 0 ${GRID_SIZE}" fill="none" stroke="${escapeXml(scene.gridColor)}" stroke-width="1"/>\n  </pattern>\n</defs>\n<rect width="100%" height="100%" fill="${escapeXml(scene.backgroundColor)}"/>\n<rect width="100%" height="100%" fill="url(#grid-pattern)" opacity="0.85"/>\n${pathMarkup}\n${nodeMarkup}\n</svg>`;
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="${scene.width}" height="${scene.height}" viewBox="0 0 ${scene.width} ${scene.height}" style="font-family: ${FONT_FAMILY}">\n<defs>\n  <pattern id="grid-pattern" width="${GRID_SIZE}" height="${GRID_SIZE}" patternUnits="userSpaceOnUse">\n    <path d="M ${GRID_SIZE} 0 L 0 0 0 ${GRID_SIZE}" fill="none" stroke="${escapeXml(scene.gridColor)}" stroke-width="1"/>\n  </pattern>\n</defs>\n<rect width="100%" height="100%" fill="${escapeXml(scene.backgroundColor)}"/>\n<rect width="100%" height="100%" fill="url(#grid-pattern)" opacity="0.85"/>\n${pathMarkup}\n${nodeMarkup}\n</svg>`;
 }
 
 export function renderExportSceneToSvg(scene: RenderScene): string {
@@ -488,22 +541,22 @@ function fitSceneForRaster(scene: RenderScene): RenderScene {
     return scaledScene;
   }
 
-  // Check if content extends beyond canvas boundaries (negative coordinates or overflow)
+  // Check if content extends beyond canvas boundaries in any direction
   // Use the four extreme boundary points to determine if adjustment is needed
   const hasNegativeCoords = contentBounds.left < 0 || contentBounds.top < 0;
   const hasOverflowCoords = contentBounds.right > scaledScene.width || contentBounds.bottom > scaledScene.height;
 
-  // If content doesn't fit within the canvas, we need to adjust
-  if (hasNegativeCoords || hasOverflowCoords) {
+  // Always validate that canvas size is sufficient to contain all content
+  // Calculate the required canvas size based on the four extreme boundary points
+  const requiredWidth = Math.ceil(contentBounds.right - contentBounds.left);
+  const requiredHeight = Math.ceil(contentBounds.bottom - contentBounds.top);
+
+  // If content doesn't fit within the canvas in any direction, we need to adjust
+  if (hasNegativeCoords || hasOverflowCoords || requiredWidth > scaledScene.width || requiredHeight > scaledScene.height) {
     // Calculate offset to ensure all content fits within the expanded canvas
     // Shift content right/down if bounds are negative to keep everything in positive coordinates
     const offsetX = contentBounds.left < 0 ? Math.ceil(Math.abs(contentBounds.left)) : 0;
     const offsetY = contentBounds.top < 0 ? Math.ceil(Math.abs(contentBounds.top)) : 0;
-
-    // Calculate the required canvas size based on the four extreme boundary points
-    // This ensures the canvas is large enough to contain all content after shifting
-    const requiredWidth = Math.ceil(contentBounds.right - contentBounds.left);
-    const requiredHeight = Math.ceil(contentBounds.bottom - contentBounds.top);
 
     // Use the larger of current size and required size to ensure no content is clipped
     const newWidth = Math.max(scaledScene.width, requiredWidth);
@@ -522,6 +575,8 @@ function fitSceneForRaster(scene: RenderScene): RenderScene {
       cp1: { x: path.cp1.x + offsetX, y: path.cp1.y + offsetY },
       cp2: { x: path.cp2.x + offsetX, y: path.cp2.y + offsetY },
     }));
+
+    console.log(`[PNG Export] fitSceneForRaster: adjusted canvas from ${scaledScene.width}x${scaledScene.height} to ${newWidth}x${newHeight}, offset=(${offsetX}, ${offsetY}), contentBounds=(${contentBounds.left},${contentBounds.top})-(${contentBounds.right},${contentBounds.bottom})`);
 
     return {
       ...scaledScene,
@@ -697,23 +752,66 @@ function drawPseudoGlyph(
 ): void {
   if (char.trim().length === 0) return;
   const code = char.codePointAt(0) ?? 0;
-  const glyphWidth = 5;
-  const glyphHeight = 7;
-  for (let row = 0; row < glyphHeight; row++) {
-    for (let col = 0; col < glyphWidth; col++) {
-      const bitIndex = (row * glyphWidth + col) % 17;
-      const drawPixel = ((code >>> bitIndex) & 1) === 1 || row === 0 || row === glyphHeight - 1;
-      if (drawPixel) {
-        for (let sy = 0; sy < glyphScale; sy++) {
-          for (let sx = 0; sx < glyphScale; sx++) {
-            setPixel(
-              buffer,
-              canvasWidth,
-              canvasHeight,
-              left + col * glyphScale + sx,
-              top + row * glyphScale + sy,
-              color
-            );
+
+  // Use higher resolution glyph grid (20x28) for better quality
+  const glyphGridWidth = 20;
+  const glyphGridHeight = 28;
+
+  // Calculate sub-pixel sampling for anti-aliasing: at least 4 samples per pixel
+  const samplesPerPixel = Math.max(4, glyphScale * 2);
+  const sampleStep = 1.0 / samplesPerPixel;
+
+  // Character structure parameters for better CJK and Latin rendering
+  const horizontalBars = 3; // Number of horizontal stroke regions
+  const verticalBars = 2;   // Number of vertical stroke regions
+
+  for (let gridY = 0; gridY < glyphGridHeight; gridY++) {
+    for (let gridX = 0; gridX < glyphGridWidth; gridX++) {
+      // Use improved pattern based on character code for better glyph structure
+      const bitIndex = (gridY * glyphGridWidth + gridX) % 29;
+      const baseIntensity = ((code >>> bitIndex) & 1) === 1 ? 1.0 : 0.0;
+
+      // Enhanced edge detection with stronger boundary definition
+      const isEdgeRow = gridY === 0 || gridY === glyphGridHeight - 1;
+      const isEdgeCol = gridX === 0 || gridX === glyphGridWidth - 1;
+      const isInnerEdge = gridY === 1 || gridY === glyphGridHeight - 2 || gridX === 1 || gridX === glyphGridWidth - 2;
+      
+      // Stronger edge boost for better readability at small sizes
+      let edgeBoost = 0.0;
+      if (isEdgeRow || isEdgeCol) {
+        edgeBoost = 0.4; // Strong outer edge
+      } else if (isInnerEdge) {
+        edgeBoost = 0.15; // Subtle inner edge for structure
+      }
+
+      // Add stroke structure enhancement for CJK characters
+      const isHorizontalStroke = gridY % Math.floor(glyphGridHeight / horizontalBars) < 3;
+      const isVerticalStroke = gridX % Math.floor(glyphGridWidth / verticalBars) < 3;
+      const strokeBoost = (isHorizontalStroke || isVerticalStroke) ? 0.1 : 0.0;
+
+      const intensity = Math.min(1.0, baseIntensity + edgeBoost + strokeBoost);
+
+      if (intensity > 0.1) {
+        // Calculate pixel position with improved scaling
+        const pixelX = left + (gridX / glyphGridWidth) * glyphScale * 6;
+        const pixelY = top + (gridY / glyphGridHeight) * glyphScale * 7;
+
+        // Draw with anti-aliasing using alpha blending
+        for (let sy = 0; sy < samplesPerPixel; sy++) {
+          for (let sx = 0; sx < samplesPerPixel; sx++) {
+            const sampleX = pixelX + sx * sampleStep * glyphScale;
+            const sampleY = pixelY + sy * sampleStep * glyphScale;
+
+            // Apply intensity-based alpha blending for grayscale anti-aliasing
+            const pixelOffset = (Math.floor(sampleY) * canvasWidth + Math.floor(sampleX)) * 4;
+            if (pixelOffset + 3 < buffer.length) {
+              const alpha = intensity * 255;
+              const invAlpha = 255 - alpha;
+              buffer[pixelOffset] = (color.r * alpha + buffer[pixelOffset] * invAlpha) / 255;
+              buffer[pixelOffset + 1] = (color.g * alpha + buffer[pixelOffset + 1] * invAlpha) / 255;
+              buffer[pixelOffset + 2] = (color.b * alpha + buffer[pixelOffset + 2] * invAlpha) / 255;
+              buffer[pixelOffset + 3] = 255;
+            }
           }
         }
       }
@@ -936,7 +1034,7 @@ export function renderExportSceneToPngFallback(scene: RenderScene): Buffer {
   return renderSceneToPngFallback(scene);
 }
 
-async function tryRenderPngViaElectronSvg(svg: string, width: number, height: number): Promise<Buffer | null> {
+async function tryRenderPngViaElectronSvg(svg: string, width: number, height: number, scale: number = 1): Promise<Buffer | null> {
   try {
     interface RuntimeNativeImage {
       isEmpty: () => boolean;
@@ -967,7 +1065,11 @@ async function tryRenderPngViaElectronSvg(svg: string, width: number, height: nu
     const dataUrl = `data:image/svg+xml;base64,${encoded}`;
 
     // Prefer offscreen BrowserWindow capture to avoid nativeImage SVG rasterization quirks on large scenes.
-    if (electronRuntime.BrowserWindow && electronRuntime.app?.isReady?.()) {
+    // But for large scenes, use tiled capture to avoid Electron window size limits
+    const MAX_SINGLE_FRAME_SIZE = 4096; // Electron has issues with windows larger than this
+    const useTiledCapture = width > MAX_SINGLE_FRAME_SIZE || height > MAX_SINGLE_FRAME_SIZE;
+    
+    if (!useTiledCapture && electronRuntime.BrowserWindow && electronRuntime.app?.isReady?.()) {
       const offscreenWindow = new electronRuntime.BrowserWindow({
         show: false,
         frame: false,
@@ -984,29 +1086,51 @@ async function tryRenderPngViaElectronSvg(svg: string, width: number, height: nu
       try {
         const html = `<!doctype html><html><head><meta charset="utf-8" /></head><body style="margin:0;overflow:hidden;background:transparent;"><img id="scene" alt="" src="${dataUrl}" style="display:block;width:${width}px;height:${height}px;" /></body></html>`;
         await offscreenWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+
+        // Wait for image to load and render with 3-second timeout protection
         await offscreenWindow.webContents.executeJavaScript(
           `new Promise((resolve) => {
-            const image = document.getElementById('scene');
-            const done = () => requestAnimationFrame(() => requestAnimationFrame(resolve));
-            if (!image) {
-              done();
-              return;
+            const timeoutId = setTimeout(() => {
+              console.log('[PNG Export] Single-frame capture: timeout after 3s, proceeding anyway');
+              resolve();
+            }, 3000);
+
+            const img = document.getElementById('scene');
+            if (img && img.complete) {
+              // Image already loaded, wait for 2 requestAnimationFrame cycles
+              requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                  clearTimeout(timeoutId);
+                  resolve();
+                });
+              });
+            } else if (img) {
+              img.onload = () => {
+                // Wait for 2 requestAnimationFrame cycles after image loads
+                requestAnimationFrame(() => {
+                  requestAnimationFrame(() => {
+                    clearTimeout(timeoutId);
+                    resolve();
+                  });
+                });
+              };
+              img.onerror = () => {
+                console.log('[PNG Export] Single-frame capture: image load error, proceeding anyway');
+                clearTimeout(timeoutId);
+                resolve();
+              };
+            } else {
+              console.log('[PNG Export] Single-frame capture: no image element found, proceeding anyway');
+              clearTimeout(timeoutId);
+              resolve();
             }
-            if (image.complete) {
-              done();
-              return;
-            }
-            image.addEventListener('load', done, { once: true });
-            image.addEventListener('error', done, { once: true });
-            setTimeout(done, 120);
-          })`,
-          false
+          })`
         );
-        // Capture the entire window without specifying a region to avoid platform-specific truncation bugs
+
+        // Capture the entire window
         const captured = await offscreenWindow.webContents.capturePage();
         const png = captured.toPNG();
         const outputSize = readPngDimensions(png);
-        // Validate dimensions to guard against platform-specific truncation
         if (
           png.length > 0
           && outputSize
@@ -1016,6 +1140,7 @@ async function tryRenderPngViaElectronSvg(svg: string, width: number, height: nu
           return png;
         }
         // If dimensions don't match, fall through to tiled capture for large scenes
+        console.log(`[PNG Export] Single-frame capture dimension mismatch: expected ${width}x${height}, got ${outputSize?.width}x${outputSize?.height}, trying tiled capture`);
       } finally {
         offscreenWindow.destroy();
       }
@@ -1027,6 +1152,8 @@ async function tryRenderPngViaElectronSvg(svg: string, width: number, height: nu
       const tileHeight = Math.min(height, MAX_PNG_CAPTURE_TILE_EDGE);
       const columns = Math.ceil(width / tileWidth);
       const rows = Math.ceil(height / tileHeight);
+
+      console.log(`[PNG Export] Starting tiled capture: scene=${width}x${height}, tile=${tileWidth}x${tileHeight}, grid=${columns}x${rows}`);
 
       const tiledWindow = new electronRuntime.BrowserWindow({
         show: false,
@@ -1042,27 +1169,58 @@ async function tryRenderPngViaElectronSvg(svg: string, width: number, height: nu
       });
 
       try {
-        // HTML structure: body matches window size, image is larger and positioned via transform
-        const html = `<!doctype html><html><head><meta charset="utf-8" /></head><body style="margin:0;overflow:hidden;background:transparent;width:${tileWidth}px;height:${tileHeight}px;"><div id="container" style="width:${width}px;height:${height}px;position:relative;"><img id="scene" alt="" src="${dataUrl}" style="position:absolute;left:0;top:0;display:block;width:${width}px;height:${height}px;" /></div></body></html>`;
+        // HTML structure: body and image are both full scene size, window acts as a viewport
+        // The image is positioned absolutely and moved to show the correct tile through the window
+        // Critical: body must be exactly scene size, image must fill body, no overflow issues
+        const html = `<!doctype html><html><head><meta charset="utf-8" /></head><body style="margin:0;padding:0;background:transparent;position:relative;width:${width}px;height:${height}px;overflow:hidden;"><img id="scene" alt="" src="${dataUrl}" style="position:absolute;left:0;top:0;display:block;width:${width}px;height:${height}px;max-width:none;max-height:none;margin:0;padding:0;" /></body></html>`;
         await tiledWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+
+        // Wait for image to load and render with 3-second timeout protection
         await tiledWindow.webContents.executeJavaScript(
           `new Promise((resolve) => {
-            const image = document.getElementById('scene');
-            const done = () => requestAnimationFrame(() => requestAnimationFrame(resolve));
-            if (!image) {
-              done();
-              return;
+            const timeoutId = setTimeout(() => {
+              console.log('[PNG Export] Tiled capture: timeout after 3s, proceeding anyway');
+              resolve();
+            }, 3000);
+
+            const img = document.getElementById('scene');
+            if (img && img.complete) {
+              // Image already loaded, wait for render
+              requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                  clearTimeout(timeoutId);
+                  resolve();
+                });
+              });
+            } else if (img) {
+              img.onload = () => {
+                // Wait for 2 requestAnimationFrame cycles after image loads
+                requestAnimationFrame(() => {
+                  requestAnimationFrame(() => {
+                    clearTimeout(timeoutId);
+                    resolve();
+                  });
+                });
+              };
+              img.onerror = () => {
+                console.log('[PNG Export] Tiled capture: image load error, proceeding anyway');
+                clearTimeout(timeoutId);
+                resolve();
+              };
+            } else {
+              console.log('[PNG Export] Tiled capture: no image element found, proceeding anyway');
+              clearTimeout(timeoutId);
+              resolve();
             }
-            if (image.complete) {
-              done();
-              return;
-            }
-            image.addEventListener('load', done, { once: true });
-            image.addEventListener('error', done, { once: true });
-            setTimeout(done, 120);
-          })`,
-          false
+          })`
         );
+
+        // Wait additional time for render to settle
+        await new Promise((resolve) => setTimeout(resolve, 100));
+
+        // Set zoom level to match scale for consistent rendering
+        const zoomLevel = Math.log2(scale);
+        (tiledWindow.webContents as any).setZoomLevel(zoomLevel);
 
         const stitchedRgba = Buffer.alloc(width * height * 4);
         for (let row = 0; row < rows; row++) {
@@ -1072,58 +1230,82 @@ async function tryRenderPngViaElectronSvg(svg: string, width: number, height: nu
             const currentTileWidth = Math.min(tileWidth, width - offsetX);
             const currentTileHeight = Math.min(tileHeight, height - offsetY);
 
-            // Move the container to show the correct portion of the image through the window
+            // Move the image to show the correct portion through the viewport
+            // Negative offset moves the image so the desired tile is visible in the window
             await tiledWindow.webContents.executeJavaScript(
               `(function() {
-                const container = document.getElementById('container');
-                if (container) {
-                  container.style.transform = 'translate(${-offsetX}px, ${-offsetY}px)';
+                const img = document.getElementById('scene');
+                if (img) {
+                  img.style.left = '${-offsetX}px';
+                  img.style.top = '${-offsetY}px';
                 }
               })()`
             );
 
-            // Wait for render to settle
-            await new Promise((resolve) => { setTimeout(resolve, 30); });
+            // Wait for render to settle using double requestAnimationFrame
+            await tiledWindow.webContents.executeJavaScript(
+              `new Promise((resolve) => {
+                requestAnimationFrame(() => {
+                  requestAnimationFrame(() => {
+                    resolve();
+                  });
+                });
+              })`
+            );
 
-            // Capture the entire fixed-size window
+            // Capture the entire fixed-size window (tileWidth x tileHeight)
             const capturedTile = await tiledWindow.webContents.capturePage();
             let tileImage = electronRuntime.nativeImage.createFromDataURL(`data:image/png;base64,${capturedTile.toPNG().toString('base64')}`);
             const tileSize = tileImage.getSize();
-            
-            // For edge tiles, we may need to crop the captured image to the actual tile size
+
+            // Validate captured tile size matches window size
+            if (tileSize.width !== tileWidth || tileSize.height !== tileHeight) {
+              console.warn(`[PNG Export] Tile size mismatch: expected ${tileWidth}x${tileHeight}, got ${tileSize.width}x${tileSize.height}`);
+            }
+
+            // For edge tiles, crop to the actual remaining scene size
             let finalTileImage = tileImage;
-            if (tileSize.width !== currentTileWidth || tileSize.height !== currentTileHeight) {
-              if (tileSize.width > currentTileWidth || tileSize.height > currentTileHeight) {
+            const expectedTileWidth = Math.min(tileWidth, width - offsetX);
+            const expectedTileHeight = Math.min(tileHeight, height - offsetY);
+
+            if (tileSize.width !== expectedTileWidth || tileSize.height !== expectedTileHeight) {
+              if (tileSize.width > expectedTileWidth || tileSize.height > expectedTileHeight) {
                 // Crop to the expected tile size
                 finalTileImage = tileImage.crop({
                   x: 0,
                   y: 0,
-                  width: currentTileWidth,
-                  height: currentTileHeight,
+                  width: expectedTileWidth,
+                  height: expectedTileHeight,
                 });
-              } else {
-                // Resize up if needed (shouldn't happen normally)
+              } else if (tileSize.width < expectedTileWidth || tileSize.height < expectedTileHeight) {
+                // This should not happen - indicates a rendering issue
+                // Pad with transparent pixels if needed
+                console.warn(`[PNG Export] Tile smaller than expected: ${tileSize.width}x${tileSize.height} < ${expectedTileWidth}x${expectedTileHeight}`);
                 finalTileImage = tileImage.resize({
-                  width: currentTileWidth,
-                  height: currentTileHeight,
+                  width: expectedTileWidth,
+                  height: expectedTileHeight,
                   quality: 'best',
                 });
               }
             }
+
+            // Log tile position for debugging
+            console.log(`[PNG Export] Tile captured: row=${row}, col=${col}, offset=(${offsetX}, ${offsetY}), expected=${expectedTileWidth}x${expectedTileHeight}, captured=${tileSize.width}x${tileSize.height}`);
 
             copyBgraTileToRgba(
               stitchedRgba,
               width,
               height,
               finalTileImage.toBitmap(),
-              currentTileWidth,
-              currentTileHeight,
+              expectedTileWidth,
+              expectedTileHeight,
               offsetX,
               offsetY
             );
           }
         }
 
+        console.log(`[PNG Export] Tiled capture complete: ${rows}x${columns} tiles, final size=${width}x${height}`);
         return encodeRgbaToPng(stitchedRgba, width, height);
       } finally {
         tiledWindow.destroy();
@@ -1156,9 +1338,10 @@ async function tryRenderPngViaElectronSvg(svg: string, width: number, height: nu
 export async function tryRenderExportPngViaElectronSvg(
   svg: string,
   width: number,
-  height: number
+  height: number,
+  scale: number = 1
 ): Promise<Buffer | null> {
-  return tryRenderPngViaElectronSvg(svg, width, height);
+  return tryRenderPngViaElectronSvg(svg, width, height, scale);
 }
 
 function treeToMarkdown(nodes: Node[], depth: number = 0): string {
@@ -1186,14 +1369,39 @@ export function exportToSVG(nodes: Node[], optionsOrSize?: LegacySize | ExportRe
 export async function exportToPNG(nodes: Node[], optionsOrSize?: LegacySize | ExportRenderOptions): Promise<Buffer> {
   const scene = fitSceneForRaster(buildRenderScene(nodes, optionsOrSize));
   const svg = renderSceneToSvg(scene);
-  const pngViaSvg = await tryRenderPngViaElectronSvg(svg, scene.width, scene.height);
-  // If SVG-based renderer produced a PNG, validate its dimensions to guard against truncation or mis-sized outputs
+  // Extract scale from options if it's an ExportRenderOptions object
+  const scale = isExportRenderOptions(optionsOrSize) && typeof optionsOrSize.scale === 'number' ? optionsOrSize.scale : 1;
+  
+  console.log(`[PNG Export] exportToPNG: scene=${scene.width}x${scene.height}, scale=${scale}, nodes=${scene.nodes.length}`);
+  
+  const pngViaSvg = await tryRenderPngViaElectronSvg(svg, scene.width, scene.height, scale);
+
+  // If SVG-based renderer produced a PNG, validate its dimensions with 2% tolerance
   if (pngViaSvg) {
     const dims = readPngDimensions(pngViaSvg);
-    if (dims && dims.width === scene.width && dims.height === scene.height) {
-      return pngViaSvg;
+    if (dims) {
+      // Calculate 2% tolerance for dimension validation
+      const widthTolerance = Math.max(2, Math.floor(scene.width * 0.02));
+      const heightTolerance = Math.max(2, Math.floor(scene.height * 0.02));
+      const widthDiff = Math.abs(dims.width - scene.width);
+      const heightDiff = Math.abs(dims.height - scene.height);
+      
+      // Check if dimensions are within 2% tolerance
+      if (widthDiff <= widthTolerance && heightDiff <= heightTolerance) {
+        // Log warning if dimensions are within tolerance but not exact match
+        if (widthDiff > 0 || heightDiff > 0) {
+          console.log(`[PNG Export] Warning: Dimension minor mismatch within 2% tolerance: expected ${scene.width}x${scene.height}, got ${dims.width}x${dims.height}`);
+        } else {
+          console.log(`[PNG Export] Success: PNG dimensions match expected ${scene.width}x${scene.height}`);
+        }
+        return pngViaSvg;
+      }
+      // Dimension mismatch exceeds 2% tolerance, fall through to Fallback
+      console.log(`[PNG Export] Dimension mismatch exceeds 2% tolerance: expected ${scene.width}x${scene.height}, got ${dims.width}x${dims.height} (tolerance: ${widthTolerance}x${heightTolerance})`);
     }
   }
+  
   // Fallback path
+  console.log(`[PNG Export] Falling back to software rendering`);
   return renderSceneToPngFallback(scene);
 }

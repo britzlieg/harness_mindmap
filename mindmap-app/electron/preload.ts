@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type {
   ExportFormat,
+  ExportPreviewResult,
   ExportScaleOptions,
   LayoutPositionMap,
   LayoutType,
@@ -34,6 +35,11 @@ const electronAPI = {
       ipcRenderer.invoke('export:toMarkdown', nodes),
     saveAs: (data: MindmapPayload, format: ExportFormat, options?: ExportScaleOptions) =>
       ipcRenderer.invoke('export:saveAs', data, format, options),
+    generatePreview: (
+      data: MindmapPayload,
+      format: ExportFormat,
+      options?: ExportScaleOptions
+    ) => ipcRenderer.invoke('export:generatePreview', data, format, options),
   },
   window: {
     minimize: () => ipcRenderer.invoke('window:minimize'),
@@ -68,6 +74,11 @@ type PreloadElectronAPI = {
       format: ExportFormat,
       options?: ExportScaleOptions
     ) => Promise<string | null>;
+    generatePreview: (
+      data: MindmapPayload,
+      format: ExportFormat,
+      options?: ExportScaleOptions
+    ) => Promise<ExportPreviewResult>;
   };
   window: typeof electronAPI.window;
 };

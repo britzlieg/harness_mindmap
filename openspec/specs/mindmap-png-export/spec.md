@@ -3,9 +3,7 @@
 ## Purpose
 
 定义 PNG 导出功能的核心需求，确保导出的 PNG 图像完整包含所有可见节点和连线，支持缩放比例调整，并提供可靠的降级机制。
-
 ## Requirements
-
 ### Requirement: PNG 导出边界计算 MUST 基于四极值点
 系统 MUST 基于场景中所有节点矩形和连线控制点的最左、最上、最右、最下四个极值点计算内容边界，确保所有可见内容都在输出图像范围内。
 
@@ -96,6 +94,10 @@ Before snapshot capture, the export flow MUST wait for render readiness and then
 - **WHEN** a user changes node text and triggers PNG export without delay
 - **THEN** the exported image contains the updated text, not the previous value
 
+#### Scenario: Electron capture waits for image load
+- **WHEN** BrowserWindow captures the SVG rasterization
+- **THEN** capture occurs only after the image element fires 'load' event and two requestAnimationFrame cycles complete
+
 ### Requirement: PNG export SHALL not fallback to synthetic placeholder imagery
 If graph content is present, exported PNG SHALL include real graph geometry derived from current node/link bounds and MUST NOT produce blank or placeholder-like output unrelated to current canvas content.
 
@@ -170,4 +172,28 @@ If PNG export fails for validation or runtime reasons, the system SHALL preserve
 #### Scenario: Export failure due to runtime capture error
 - **WHEN** PNG rendering fails during export
 - **THEN** the user remains in the current document session with unchanged mindmap state
+
+### Requirement: PNG 导出 SVG 光栅化 MUST 使用无衬线字体族
+
+系统在生成 PNG 导出时，SVG 光栅化流程 MUST 使用无衬线字体族（sans-serif）进行文字渲染，MUST NOT 使用浏览器默认衬线字体（如 Times New Roman）。
+
+#### Scenario: SVG 根元素包含字体声明
+- **WHEN** 导出流程生成 SVG 时
+- **THEN** SVG 根元素 `<svg>` 包含 `style="font-family: system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif"` 属性
+
+#### Scenario: 节点文字元素包含字体声明
+- **WHEN** 导出流程生成节点文字 `<text>` 元素时
+- **THEN** 每个 `<text>` 元素包含 `font-family="system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif"` 属性
+
+#### Scenario: 优先级徽章文字包含字体声明
+- **WHEN** 节点包含优先级（priority > 0）时生成优先级徽章
+- **THEN** 徽章内的 `<text>` 元素同样包含 `font-family` 属性
+
+#### Scenario: 导出 PNG 文字清晰度符合预期
+- **WHEN** 用户以 100% 缩放比例导出包含中文和英文的思维导图
+- **THEN** 生成的 PNG 中文字边缘清晰，使用无衬线字体，与屏幕渲染效果视觉一致
+
+#### Scenario: 高倍率导出文字更清晰
+- **WHEN** 用户以 200% 或更高倍率导出同一份导图
+- **THEN** 文字边缘细节更清晰，字体渲染质量随倍率提升而提升，MUST NOT 出现模糊或锯齿
 

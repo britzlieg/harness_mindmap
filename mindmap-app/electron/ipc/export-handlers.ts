@@ -1,7 +1,7 @@
 import { ipcMain, dialog } from 'electron';
 import fs from 'fs';
-import { exportToMarkdown, exportToPNG, exportToSVG } from '../services/export-orchestrator';
-import type { ExportScaleOptions, MindmapPayload } from '../shared/types';
+import { exportToMarkdown, exportToPNG, exportToSVG, generateExportPreview } from '../services/export-orchestrator';
+import type { ExportPreviewResult, ExportScaleOptions, MindmapPayload } from '../shared/types';
 import { normalizeWritePath, PathPolicyError } from './path-policy';
 import { assertTrustedIpcSender } from './security';
 import { assertMindmapPayload, assertNodeArray, parseExportFormat } from './validators';
@@ -79,6 +79,26 @@ export function registerExportHandlers(): void {
     assertNodeArray(nodes);
 
     return exportToMarkdown(nodes);
+  });
+
+  ipcMain.handle('export:generatePreview', async (event, data: unknown, format: unknown, options?: ExportScaleOptions): Promise<ExportPreviewResult> => {
+    assertTrustedIpcSender(event);
+    assertMindmapPayload(data);
+
+    const parsedFormat = parseExportFormat(format);
+    if (parsedFormat === 'markdown') {
+      // Markdown doesn't need preview
+      return { svg: '', width: 0, height: 0, estimatedSizeKb: 0 };
+    }
+
+    const scalePercent = options?.scalePercent !== undefined ? options.scalePercent / 100 : 1;
+    return generateExportPreview(data.nodes, parsedFormat, {
+      metadata: data.metadata ?? null,
+      minWidth: 1200,
+      minHeight: 800,
+      padding: 56,
+      scale: scalePercent,
+    });
   });
 
   ipcMain.handle('export:saveAs', async (event, data: unknown, format: unknown, options?: ExportScaleOptions) => {

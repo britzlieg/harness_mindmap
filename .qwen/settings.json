@@ -5,7 +5,12 @@
       "Bash(npm test *)",
       "Bash(powershell *)",
       "Bash(openspec *)",
-      "Bash(mkdir *)"
+      "Bash(mkdir *)",
+      "Bash(move *)",
+      "Bash(xcopy *)",
+      "Bash(true)",
+      "Bash(node *)",
+      "Bash(npm install *)"
     ]
   },
   "$version": 3

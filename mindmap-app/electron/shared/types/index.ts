@@ -108,3 +108,10 @@ export type ExportFormat = 'markdown' | 'svg' | 'png';
 export interface ExportScaleOptions {
   scalePercent?: number;
 }
+
+export interface ExportPreviewResult {
+  svg: string;
+  width: number;
+  height: number;
+  estimatedSizeKb: number;
+}

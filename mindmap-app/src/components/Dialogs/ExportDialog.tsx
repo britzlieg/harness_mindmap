@@ -1,9 +1,9 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect, useCallback } from 'react';
 import { useUiStore } from '../../stores/ui-store';
 import { useMindmapStore } from '../../stores/mindmap-store';
 import { EXPORT_TEXT } from '../../constants/ui-text';
 import { normalizeNodeTextTree } from '../../utils/node-text';
-import type { ExportFormat } from '../../types';
+import type { ExportFormat, ExportPreviewResult } from '../../types';
 
 const formats = [
   { key: 'markdown', label: EXPORT_TEXT.formats.markdown, ext: '.md' },
@@ -15,6 +15,8 @@ const PNG_SCALE_PERCENT_DEFAULT = 100;
 const PNG_SCALE_PERCENT_MIN = 50;
 const PNG_SCALE_PERCENT_MAX = 400;
 const PNG_SCALE_INPUT_PATTERN = /^\d+$/;
+
+const PREVIEW_DEBOUNCE_MS = 200;
 
 function waitForRenderReady(): Promise<void> {
   return new Promise((resolve) => {
@@ -29,24 +31,120 @@ function waitForRenderReady(): Promise<void> {
 }
 
 export function ExportDialog() {
-  const { exportDialogOpen, toggleExportDialog } = useUiStore();
+  const { exportDialogOpen, toggleExportDialog, lastExportFormat, lastPngScalePercent, setLastExportFormat, setLastPngScalePercent } = useUiStore();
   const setNodes = useMindmapStore((s) => s.setNodes);
-  useMindmapStore((s) => s.nodes);
-  useMindmapStore((s) => s.metadata);
-  const [pngScaleInput, setPngScaleInput] = useState(String(PNG_SCALE_PERCENT_DEFAULT));
+  const nodes = useMindmapStore((s) => s.nodes);
+  const metadata = useMindmapStore((s) => s.metadata);
+  
+  // Wizard state
+  const [currentStep, setCurrentStep] = useState<1 | 2 | 3>(1);
+  const [selectedFormat, setSelectedFormat] = useState<ExportFormat>(lastExportFormat);
+  const [pngScaleInput, setPngScaleInput] = useState(String(lastPngScalePercent));
   const [pngScaleError, setPngScaleError] = useState('');
+  
+  // Preview state
+  const [previewData, setPreviewData] = useState<ExportPreviewResult | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState('');
 
   const pngScaleHint = useMemo(
     () => `${EXPORT_TEXT.pngScaleHintPrefix} ${PNG_SCALE_PERCENT_MIN}-${PNG_SCALE_PERCENT_MAX}%`,
     []
   );
 
-  if (!exportDialogOpen) return null;
+  // Debounce preview update when scale changes
+  useEffect(() => {
+    if (currentStep !== 2 || selectedFormat === 'markdown') {
+      return;
+    }
 
-  const handleExport = async (format: ExportFormat) => {
+    const handler = setTimeout(async () => {
+      await generatePreview();
+    }, PREVIEW_DEBOUNCE_MS);
+
+    return () => clearTimeout(handler);
+  }, [currentStep, selectedFormat, pngScaleInput, nodes, metadata]);
+
+  // Initialize format from last used
+  useEffect(() => {
+    if (exportDialogOpen) {
+      setSelectedFormat(lastExportFormat);
+      setPngScaleInput(String(lastPngScalePercent));
+      setCurrentStep(1);
+      setPreviewData(null);
+      setPreviewError('');
+      setPngScaleError('');
+    }
+  }, [exportDialogOpen]);
+
+  const generatePreview = useCallback(async () => {
+    if (!metadata || selectedFormat === 'markdown') {
+      return;
+    }
+
+    setPreviewLoading(true);
+    setPreviewError('');
+
+    try {
+      const sanitizedNodes = normalizeNodeTextTree(nodes);
+      let scalePercent = PNG_SCALE_PERCENT_DEFAULT;
+      
+      if (selectedFormat === 'png') {
+        const normalizedInput = pngScaleInput.trim();
+        if (PNG_SCALE_INPUT_PATTERN.test(normalizedInput)) {
+          const parsed = Number(normalizedInput);
+          if (Number.isInteger(parsed) && parsed >= PNG_SCALE_PERCENT_MIN && parsed <= PNG_SCALE_PERCENT_MAX) {
+            scalePercent = parsed;
+          }
+        }
+      }
+
+      const result = await window.electronAPI.export.generatePreview(
+        { nodes: sanitizedNodes, metadata },
+        selectedFormat,
+        selectedFormat === 'png' ? { scalePercent } : undefined
+      );
+      
+      setPreviewData(result);
+    } catch (error) {
+      console.error('Preview generation failed:', error);
+      setPreviewError('预览生成失败，请重试');
+    } finally {
+      setPreviewLoading(false);
+    }
+  }, [nodes, metadata, selectedFormat, pngScaleInput]);
+
+  const validatePngScale = (): number | null => {
+    const normalizedInput = pngScaleInput.trim();
+    if (!PNG_SCALE_INPUT_PATTERN.test(normalizedInput)) {
+      setPngScaleError(EXPORT_TEXT.pngScaleInvalid);
+      return null;
+    }
+    const parsed = Number(normalizedInput);
+    if (!Number.isInteger(parsed) || parsed < PNG_SCALE_PERCENT_MIN || parsed > PNG_SCALE_PERCENT_MAX) {
+      setPngScaleError(EXPORT_TEXT.pngScaleInvalid);
+      return null;
+    }
+    setPngScaleError('');
+    return parsed;
+  };
+
+  const handleNextStep1 = () => {
+    setLastExportFormat(selectedFormat);
+    if (selectedFormat === 'png') {
+      const validScale = validatePngScale();
+      if (validScale === null) {
+        return;
+      }
+      setLastPngScalePercent(validScale);
+    }
+    setCurrentStep(2);
+    // Preview will be generated by useEffect
+  };
+
+  const handleExport = async () => {
     try {
       await waitForRenderReady();
-      const { nodes, metadata } = useMindmapStore.getState();
       if (!metadata) {
         throw new Error('Current document metadata is missing, cannot export.');
       }
@@ -55,67 +153,141 @@ export function ExportDialog() {
       setNodes(sanitizedNodes);
 
       let pngScalePercent = PNG_SCALE_PERCENT_DEFAULT;
-      if (format === 'png') {
-        const normalizedInput = pngScaleInput.trim();
-        if (!PNG_SCALE_INPUT_PATTERN.test(normalizedInput)) {
-          setPngScaleError(EXPORT_TEXT.pngScaleInvalid);
+      if (selectedFormat === 'png') {
+        const validScale = validatePngScale();
+        if (validScale === null) {
           return;
         }
-        const parsed = Number(normalizedInput);
-        if (!Number.isInteger(parsed) || parsed < PNG_SCALE_PERCENT_MIN || parsed > PNG_SCALE_PERCENT_MAX) {
-          setPngScaleError(EXPORT_TEXT.pngScaleInvalid);
-          return;
-        }
-        pngScalePercent = parsed;
+        pngScalePercent = validScale;
       }
-      setPngScaleError('');
 
       const filePath = await window.electronAPI.export.saveAs(
         { nodes: sanitizedNodes, metadata },
-        format,
-        format === 'png' ? { scalePercent: pngScalePercent } : undefined
+        selectedFormat,
+        selectedFormat === 'png' ? { scalePercent: pngScalePercent } : undefined
       );
+      
       if (filePath) {
         console.log('Export complete:', filePath);
         toggleExportDialog();
       }
     } catch (error) {
       console.error('Export failed:', error);
-      if (format === 'png') {
+      if (selectedFormat === 'png') {
         setPngScaleError(error instanceof Error ? error.message : EXPORT_TEXT.pngScaleInvalid);
       }
     }
   };
 
+  const handlePrevStep = () => {
+    if (currentStep === 2) {
+      setCurrentStep(1);
+    }
+  };
+
+  const handleScaleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setPngScaleInput(e.target.value);
+    if (pngScaleError) {
+      setPngScaleError('');
+    }
+  };
+
+  if (!exportDialogOpen) return null;
+
   return (
     <div className="dialog-overlay" onClick={toggleExportDialog}>
       <div className="dialog-shell glass-surface-strong" onClick={(e) => e.stopPropagation()}>
         <h2 className="dialog-title">{EXPORT_TEXT.title}</h2>
-        <div className="ui-form-group">
-          <label htmlFor="png-scale-input" className="ui-text-muted text-xs">{EXPORT_TEXT.pngScaleLabel}</label>
-          <input
-            id="png-scale-input"
-            data-testid="png-scale-input"
-            className="ui-input mt-1"
-            value={pngScaleInput}
-            onChange={(e) => {
-              setPngScaleInput(e.target.value);
-              if (pngScaleError) {
-                setPngScaleError('');
-              }
-            }}
-            inputMode="numeric"
-            placeholder={String(PNG_SCALE_PERCENT_DEFAULT)}
-          />
-          <p className="ui-text-muted text-xs mt-1">{pngScaleHint}</p>
-          {pngScaleError && <p className="ui-text-error text-xs mt-1">{pngScaleError}</p>}
+        
+        {/* Step indicator */}
+        <div className="flex items-center gap-2 mb-4 text-xs ui-text-muted">
+          <span className={currentStep === 1 ? 'text-primary font-medium' : ''}>步骤 1: 选择格式</span>
+          <span>→</span>
+          <span className={currentStep === 2 ? 'text-primary font-medium' : ''}>步骤 2: 预览调整</span>
+          <span>→</span>
+          <span className={currentStep === 3 ? 'text-primary font-medium' : ''}>步骤 3: 保存</span>
         </div>
-        {formats.map(({ key, label, ext }) => (
-          <button key={key} onClick={() => void handleExport(key)} className="ui-format-option">
-            <div className="font-medium text-sm">{label} <span className="ui-text-muted">{ext}</span></div>
-          </button>
-        ))}
-        <button onClick={toggleExportDialog} className="ui-button ui-button--secondary w-full mt-2">{EXPORT_TEXT.cancel}</button>
+
+        {/* Step 1: Format selection */}
+        {currentStep === 1 && (
+          <>
+            <p className="ui-text-muted text-sm mb-3">选择导出格式：</p>
+            {formats.map(({ key, label, ext }) => (
+              <button
+                key={key}
+                onClick={() => setSelectedFormat(key)}
+                className={`ui-format-option mb-2 ${selectedFormat === key ? 'border-primary bg-primary/10' : ''}`}
+              >
+                <div className="font-medium text-sm">{label} <span className="ui-text-muted">{ext}</span></div>
+              </button>
+            ))}
+            <div className="flex gap-2 mt-4">
+              <button onClick={toggleExportDialog} className="ui-button ui-button--secondary flex-1">{EXPORT_TEXT.cancel}</button>
+              <button onClick={handleNextStep1} className="ui-button flex-1">下一步</button>
+            </div>
+          </>
+        )}
+
+        {/* Step 2: Preview and adjust */}
+        {currentStep === 2 && (
+          <>
+            {/* Preview area */}
+            <div className="export-preview-container mb-4">
+              {previewLoading && (
+                <div className="export-preview-loading">
+                  <div className="loading-spinner" />
+                  <span className="text-xs ui-text-muted">生成预览中...</span>
+                </div>
+              )}
+              {previewError && (
+                <div className="export-preview-error text-xs ui-text-error p-2">
+                  {previewError}
+                  <button onClick={generatePreview} className="ui-button ui-button--secondary text-xs ml-2">重试</button>
+                </div>
+              )}
+              {previewData && previewData.svg && (
+                <div className="export-preview-content">
+                  <div
+                    className="export-preview-svg"
+                    dangerouslySetInnerHTML={{ __html: previewData.svg }}
+                  />
+                  <div className="export-preview-info text-xs ui-text-muted mt-2">
+                    尺寸：{previewData.width} × {previewData.height} px
+                    {selectedFormat !== 'markdown' && (
+                      <span className="ml-3">估算大小：~{previewData.estimatedSizeKb} KB</span>
+                    )}
+                  </div>
+                  <p className="text-xs ui-text-muted mt-1 italic">
+                    提示：预览效果可能与最终导出略有差异
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* PNG scale control */}
+            {selectedFormat === 'png' && (
+              <div className="ui-form-group mb-4">
+                <label htmlFor="png-scale-input" className="ui-text-muted text-xs">{EXPORT_TEXT.pngScaleLabel}</label>
+                <input
+                  id="png-scale-input"
+                  data-testid="png-scale-input"
+                  className="ui-input mt-1"
+                  value={pngScaleInput}
+                  onChange={handleScaleInputChange}
+                  inputMode="numeric"
+                  placeholder={String(PNG_SCALE_PERCENT_DEFAULT)}
+                />
+                <p className="ui-text-muted text-xs mt-1">{pngScaleHint}</p>
+                {pngScaleError && <p className="ui-text-error text-xs mt-1">{pngScaleError}</p>}
+              </div>
+            )}
+
+            <div className="flex gap-2 mt-4">
+              <button onClick={handlePrevStep} className="ui-button ui-button--secondary flex-1">上一步</button>
+              <button onClick={handleExport} className="ui-button flex-1">确认导出</button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
