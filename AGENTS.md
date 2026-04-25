@@ -6,7 +6,7 @@
 
 每次启动新的 Codex session 时，建议按下面顺序建立上下文：
 
-1. 优先阅读 `docs/mindmap-app-architecture/README.md`。
+1. 这个是路由地图，如果需要了解整个项目，可以从这个 `docs/mindmap-app-architecture/README.md`入手。
    这是架构文档与变更影响分析的导航入口。
 2. 根据当前任务类型，再继续打开对应文档：
    - `01-functional-architecture.md`：功能视角、用户流程、核心能力

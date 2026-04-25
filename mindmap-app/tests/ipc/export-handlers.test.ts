@@ -7,6 +7,7 @@ const mockWriteFileSync = vi.fn();
 const mockExportToMarkdown = vi.fn(() => '# test');
 const mockExportToSVG = vi.fn(() => '<svg></svg>');
 const mockExportToPNG = vi.fn(async () => Buffer.from([137, 80, 78, 71]));
+const mockGenerateExportPreview = vi.fn(() => ({ svg: '<svg></svg>', width: 1200, height: 800, estimatedSizeKb: 12 }));
 
 vi.mock('electron', () => ({
   ipcMain: mockIpcMain,
@@ -22,6 +23,7 @@ vi.mock('../../electron/services/export-orchestrator', () => ({
   exportToMarkdown: mockExportToMarkdown,
   exportToSVG: mockExportToSVG,
   exportToPNG: mockExportToPNG,
+  generateExportPreview: mockGenerateExportPreview,
 }));
 
 describe('export-handlers', () => {
@@ -161,5 +163,25 @@ describe('export-handlers', () => {
 
     const toMarkdownHandler = mockIpcMain.handle.mock.calls.find((call) => call[0] === 'export:toMarkdown')?.[1];
     await expect(toMarkdownHandler(createTrustedEvent(), {})).rejects.toThrow('Nodes must be an array.');
+  });
+
+  it('passes normalized scale to preview generation without diverging from PNG semantics', async () => {
+    const { registerExportHandlers } = await import('../../electron/ipc/export-handlers');
+    registerExportHandlers();
+
+    const previewHandler = mockIpcMain.handle.mock.calls.find((call) => call[0] === 'export:generatePreview')?.[1];
+    const preview = await previewHandler(createTrustedEvent(), {
+      nodes: [],
+      metadata: { layoutType: 'mindmap', theme: 'default' },
+    }, 'png', { scalePercent: 200 });
+
+    expect(preview).toEqual({ svg: '<svg></svg>', width: 1200, height: 800, estimatedSizeKb: 12 });
+    expect(mockGenerateExportPreview).toHaveBeenCalledWith([], 'png', expect.objectContaining({
+      metadata: expect.objectContaining({ layoutType: 'mindmap', theme: 'default' }),
+      minWidth: 1200,
+      minHeight: 800,
+      padding: 56,
+      scale: 2,
+    }));
   });
 });

@@ -1,6 +1,6 @@
 # MindMap App Architecture Docs
 
-本目录用于记录 `d:/2/mindmap-app` 的架构与实现文档，帮助后续开发和 AI 协作快速定位上下文。
+本目录用于记录 `d:/2/mindmap-app` 的架构与实现文档，帮助后续开发和 AI 协作快速定位上下文。读取时按需读取，无需一次性全部读取。
 
 ## 文档导航
 

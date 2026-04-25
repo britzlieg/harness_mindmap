@@ -1,7 +1,7 @@
 import type { Node } from '../shared/types';
-import type { ExportRenderOptions, LegacySize } from './export-service';
+import type { ExportRenderOptions, LegacySize, PngRenderResult } from './export-service';
 import type { ExportPreviewResult } from '../shared/types';
-import { exportToMarkdown as exportMarkdown, fitExportSceneForRaster } from './export-service';
+import { exportToMarkdown as exportMarkdown, fitExportSceneForRaster, normalizeExportRenderOptions } from './export-service';
 import { buildScene } from './export/scene-builder';
 import { renderPng } from './export/png-renderer';
 import { renderSvg } from './export/svg-renderer';
@@ -21,7 +21,15 @@ export async function exportToPNG(
   nodes: Node[],
   optionsOrSize?: LegacySize | ExportRenderOptions
 ): Promise<Buffer> {
-  return renderPng(buildScene(nodes, optionsOrSize));
+  return (await exportToPNGWithDiagnostics(nodes, optionsOrSize)).buffer;
+}
+
+export async function exportToPNGWithDiagnostics(
+  nodes: Node[],
+  optionsOrSize?: LegacySize | ExportRenderOptions
+): Promise<PngRenderResult> {
+  const options = normalizeExportRenderOptions(optionsOrSize);
+  return renderPng(buildScene(nodes, options), options.scale);
 }
 
 /**

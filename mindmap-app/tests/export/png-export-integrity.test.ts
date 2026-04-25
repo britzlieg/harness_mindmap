@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { exportToPNG, readPngDimensions, buildExportRenderScene, fitExportSceneForRaster } from '../../electron/services/export-service';
+import {
+  exportToPNG,
+  readPngDimensions,
+  buildExportRenderScene,
+  fitExportSceneForRaster,
+  planPngCaptureTiles,
+} from '../../electron/services/export-service';
+import type { RenderScene } from '../../electron/services/export-service';
 import type { Node, FileMetadata } from '../../src/types';
 
 /**
@@ -41,6 +48,21 @@ function makeMetadata(overrides?: Partial<FileMetadata>): FileMetadata {
     createdAt: Date.now(),
     updatedAt: Date.now(),
     version: 1,
+    ...overrides,
+  };
+}
+
+function makeRenderScene(overrides?: Partial<RenderScene>): RenderScene {
+  return {
+    width: 1000,
+    height: 800,
+    backgroundColor: '#ffffff',
+    gridColor: '#eeeeee',
+    connectionColor: '#999999',
+    connectionWidth: 2,
+    dashedConnections: false,
+    nodes: [],
+    connections: [],
     ...overrides,
   };
 }
@@ -161,6 +183,91 @@ describe('PNG Export Integrity', () => {
 
       expect(scene.width).toBeGreaterThanOrEqual(960);
       expect(scene.height).toBeGreaterThanOrEqual(640);
+    });
+
+    it('expands width when content slightly exceeds the right boundary', () => {
+      const fittedScene = fitExportSceneForRaster(makeRenderScene({
+        nodes: [{
+          id: 'right-overflow',
+          text: 'Right Overflow',
+          priority: 0,
+          progress: 0,
+          x: 900,
+          y: 120,
+          width: 140,
+          height: 40,
+          style: {
+            backgroundColor: '#ffffff',
+            textColor: '#111111',
+            borderColor: '#333333',
+            borderRadius: 8,
+            fontSize: 14,
+            fontWeight: 400,
+            padding: 8,
+          },
+        }],
+      }));
+
+      expect(fittedScene.width).toBe(1040);
+      expect(fittedScene.height).toBe(800);
+      expect(fittedScene.nodes[0].x + fittedScene.nodes[0].width).toBeLessThanOrEqual(fittedScene.width);
+    });
+
+    it('expands height when content slightly exceeds the bottom boundary', () => {
+      const fittedScene = fitExportSceneForRaster(makeRenderScene({
+        nodes: [{
+          id: 'bottom-overflow',
+          text: 'Bottom Overflow',
+          priority: 0,
+          progress: 0,
+          x: 120,
+          y: 770,
+          width: 140,
+          height: 60,
+          style: {
+            backgroundColor: '#ffffff',
+            textColor: '#111111',
+            borderColor: '#333333',
+            borderRadius: 8,
+            fontSize: 14,
+            fontWeight: 400,
+            padding: 8,
+          },
+        }],
+      }));
+
+      expect(fittedScene.width).toBe(1000);
+      expect(fittedScene.height).toBe(830);
+      expect(fittedScene.nodes[0].y + fittedScene.nodes[0].height).toBeLessThanOrEqual(fittedScene.height);
+    });
+
+    it('shifts negative coordinates into view without losing original canvas coverage', () => {
+      const fittedScene = fitExportSceneForRaster(makeRenderScene({
+        nodes: [{
+          id: 'negative-offset',
+          text: 'Negative Offset',
+          priority: 0,
+          progress: 0,
+          x: -32,
+          y: -18,
+          width: 120,
+          height: 40,
+          style: {
+            backgroundColor: '#ffffff',
+            textColor: '#111111',
+            borderColor: '#333333',
+            borderRadius: 8,
+            fontSize: 14,
+            fontWeight: 400,
+            padding: 8,
+          },
+        }],
+      }));
+
+      expect(fittedScene.width).toBe(1032);
+      expect(fittedScene.height).toBe(818);
+      expect(fittedScene.nodes[0].x).toBe(0);
+      expect(fittedScene.nodes[0].y).toBe(0);
     });
   });
 
@@ -404,6 +511,15 @@ describe('PNG Export Integrity', () => {
   });
 
   describe('Tiled Capture Alignment', () => {
+    it('plans conservative tile heights for tall production-sized scenes', () => {
+      const plan = planPngCaptureTiles(1200, 2228);
+
+      expect(plan.tileWidth).toBe(1200);
+      expect(plan.tileHeight).toBe(1024);
+      expect(plan.columns).toBe(1);
+      expect(plan.rows).toBe(3);
+    });
+
     it('handles large scene that may trigger tiled capture', async () => {
       // Create a large mindmap that could trigger tiled capture
       const root = createLargeMindmap();
